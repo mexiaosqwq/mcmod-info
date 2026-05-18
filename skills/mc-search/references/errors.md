@@ -12,15 +12,15 @@
 | `NO_RESULTS` | 无搜索结果 | 尝试其他关键词或平台 |
 | `EMPTY_KEYWORD` | 搜索关键词为空 | 输入有效的搜索关键词 |
 | `EMPTY_AUTHOR` | 作者名为空 | 输入有效的作者名 |
+| `EMPTY_NAME` | 项目名称为空 | 输入有效的项目名称 |
 | `FETCH_FAILED` | 网络请求失败 | 检查网络或稍后重试 |
 | `NOT_FOUND` | 资源不存在 | 检查 URL 或 ID 是否正确 |
 | `URL_NOT_FOUND` | URL 指向的资源不存在 | 检查 URL 是否正确 |
 | `READ_ERROR` | wiki 页面读取失败 | 检查 URL 或稍后重试 |
-| `CAPTCHA` | MC百科触发验证码 | 稍后重试或使用 Modrinth |
 | `DISABLED` | 请求的平台已禁用 | 启用对应平台或更换平台 |
-| `INVALID_INPUT` | 输入参数不合法 | 检查命令参数格式 |
 
 > 注：CLI 错误码在 HTTP 200 下以 JSON `{"error": "...", "message": "..."}` 返回，与 shell exit code 0 配合。
+> 注：`CAPTCHA` 和 `INVALID_INPUT` 是 `_show_mcmod()` 内部返回码，不作为 CLI `_fail` 错误码。
 
 ## API `_error` 键（`_error` 字段，core.py）
 
