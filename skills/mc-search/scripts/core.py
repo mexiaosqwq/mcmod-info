@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -503,6 +504,8 @@ def set_platform_enabled(mcmod: bool = True, modrinth: bool = True, wiki: bool =
 # 使用 curl_cffi 模拟浏览器 TLS 指纹，绕过 www.mcmod.cn 的 CDN 盾
 _MCMOD_SESSION = None
 _MCMOD_BYPASSED = False
+_MCMOD_LOCK = threading.Lock()
+_CURL_IMPERSONATE_FALLBACKS = ["chrome131", "chrome120", "safari17_0"]
 
 
 def _mcmod_host(url: str) -> str:
@@ -561,8 +564,11 @@ def _bypass_mcmod_cdn(timeout: int = 15) -> bool:
         logger.error("curl_cffi 未安装，无法访问 MC百科 (www.mcmod.cn)")
         return False
 
-    if _MCMOD_SESSION is None:
-        _MCMOD_SESSION = curl_requests.Session()
+    with _MCMOD_LOCK:
+        if _MCMOD_BYPASSED:
+            return True
+        if _MCMOD_SESSION is None:
+            _MCMOD_SESSION = curl_requests.Session()
 
     headers = {
         "User-Agent": HTTP_HEADERS["User-Agent"],
@@ -608,21 +614,35 @@ def _curl_mcmod(url: str, timeout: int = 10) -> str:
     for attempt in range(_CDN_BYPASS_RETRIES):
         if not _MCMOD_BYPASSED:
             if not _bypass_mcmod_cdn(timeout=timeout):
-                # 绕过失败，尝试重置 session 重新来过
                 if attempt == 0:
-                    _MCMOD_SESSION = None
+                    with _MCMOD_LOCK:
+                        _MCMOD_SESSION = None
                     continue
                 return ""
 
         try:
-            r = _MCMOD_SESSION.get(url, impersonate=_CURL_IMPERSONATE, headers=headers, timeout=timeout)
+            with _MCMOD_LOCK:
+                if _MCMOD_SESSION is None:
+                    from curl_cffi import requests as curl_requests
+                    _MCMOD_SESSION = curl_requests.Session()
+                r = _MCMOD_SESSION.get(url, impersonate=_CURL_IMPERSONATE, headers=headers, timeout=timeout)
         except Exception as e:
             logger.warning(f"MC百科请求失败 ({url}): {e}")
-            _MCMOD_BYPASSED = False
-            _MCMOD_SESSION = None
+            with _MCMOD_LOCK:
+                _MCMOD_BYPASSED = False
+                _MCMOD_SESSION = None
             continue
 
         text = r.text
+
+        # Captcha / 限流页面：退避后重试（立即重试必撞墙）
+        if '<title>安全验证</title>' in text[:2000] or '<title>访问间隔过短' in text[:2000]:
+            with _MCMOD_LOCK:
+                _MCMOD_BYPASSED = False
+                _MCMOD_SESSION = None
+            if attempt < _CDN_BYPASS_RETRIES - 1:
+                time.sleep(1.0 + attempt)  # 1s, 2s 递增退避
+            continue
 
         # 处理 yxd_token 页面（JS 设置 cookie 后重定向）
         if 'yxd_token=' in text and len(text) < _MIN_TOKEN_PAGE_LEN:
@@ -637,16 +657,15 @@ def _curl_mcmod(url: str, timeout: int = 10) -> str:
             base = f"https://{host}"
             try:
                 _do_cdn_shield_post(_MCMOD_SESSION, base, headers, timeout)
-                # 重试原请求（首次重试可能仍为 CC check，需 2 次）
                 for _ in range(_CDN_RETRY_ATTEMPTS):
                     r = _MCMOD_SESSION.get(url, impersonate=_CURL_IMPERSONATE, headers=headers, timeout=timeout)
                     if _WAF_CC_CHECK not in r.text or len(r.text) >= _MAX_CC_PAGE_LEN:
                         return r.text
             except Exception as e:
                 logger.warning(f"CDN bypass post failed for {host}: {e}")
-            # 绕过失败：重置 session 后重试
-            _MCMOD_BYPASSED = False
-            _MCMOD_SESSION = None
+            with _MCMOD_LOCK:
+                _MCMOD_BYPASSED = False
+                _MCMOD_SESSION = None
             continue
 
         return text
