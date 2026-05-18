@@ -112,11 +112,7 @@ _CDN_RETRY_ATTEMPTS = 2                  # CC check 后重试原请求次数
 # ═══════════════════════════════════════════════════════════════
 
 def _is_mcmod_blocked(html: str) -> bool:
-    """检测页面是否被 MC百科 WAF/防火墙拦截。
-
-    "AIWAFCDN" 在正常 MC百科 页面中也会出现（CDN 配置），
-    因此仅用于短页面检测和 503 联合判断。
-    """
+    """检测页面是否被 MC百科 WAF/防火墙/验证码拦截。"""
     if not html:
         return True
     # 503 + AIWAFCDN 是明确的 WAF 错误页
@@ -125,6 +121,12 @@ def _is_mcmod_blocked(html: str) -> bool:
     # 短页面（<1000B）含可疑签名 → 被阻断
     if len(html) < MIN_HTML_LEN and any(sig in html for sig in _WAF_SIGNATURES):
         return True
+    # Captcha/限流页面（通常 15KB+，不含 WAF 签名，需检测标题）
+    title_m = re.search(r'<title>([^<]+)</title>', html)
+    if title_m:
+        title = title_m.group(1)
+        if title in ("安全验证", "安全验证中", "访问间隔过短，请稍后再试"):
+            return True
     return False
 
 
@@ -1958,8 +1960,14 @@ def search_modrinth(keyword: str, max_results: int = 5, project_type: str = "mod
                     # 标准化为 Modrinth hit 格式
                     pt_list = bhit.get("project_types")
                     project_type = pt_list[0] if pt_list else bhit.get("project_type", "mod")
+                    bbsmc_title = bhit.get("name", bhit.get("title", ""))
+                    # 从双语名 "中文 - English" 中提取纯英文 name_en
+                    name_en = bbsmc_title
+                    if _is_cjk(bbsmc_title):
+                        parts = re.split(r'\s*[-–—]\s*', bbsmc_title, 1)
+                        name_en = parts[1].strip() if len(parts) == 2 and not _is_cjk(parts[1]) else ""
                     normalized = {
-                        "title": bhit.get("name", bhit.get("title", "")),
+                        "title": bbsmc_title,
                         "slug": bhit.get("slug", ""),
                         "project_type": project_type,
                         "description": bhit.get("summary", bhit.get("description", "")),
@@ -1968,6 +1976,7 @@ def search_modrinth(keyword: str, max_results: int = 5, project_type: str = "mod
                         "icon_url": bhit.get("icon_url", ""),
                         "author": bhit.get("author", ""),
                         "versions": bhit.get("versions", []),
+                        "_name_en": name_en,  # 预提取的纯英文名，供结果构建使用
                     }
                     matched_hits.append((normalized, normalized["slug"]))
             if not matched_hits:
@@ -2006,7 +2015,7 @@ def search_modrinth(keyword: str, max_results: int = 5, project_type: str = "mod
 
         result = {
             "name": hit.get("title", ""),
-            "name_en": hit.get("title", ""),
+            "name_en": hit.get("_name_en") or hit.get("title", ""),
             "name_zh": "",
             "url": _build_modrinth_url(slug, proj_type or project_type or "mod"),
             "source": "modrinth",
@@ -3492,32 +3501,36 @@ def _calc_name_score(name_lc: str, query_lc: str) -> int:
     if not name_lc or not query_lc:
         return 0
 
-    # 1. 精确匹配
-    if name_lc == query_lc:
+    # 连字符归一化：将 - 替换为空格，使 "fabric-api" 能匹配 "Fabric API"
+    name_norm = name_lc.replace("-", " ")
+    query_norm = query_lc.replace("-", " ")
+
+    # 1. 精确匹配（同时检查原始和归一化版本）
+    if name_lc == query_lc or name_norm == query_norm:
         bonus = max(0, MatchScore.EXACT_MATCH_MAX_BONUS - len(name_lc) * MatchScore.EXACT_MATCH_BONUS_FACTOR)
         return MatchScore.EXACT_MATCH_BASE + bonus
 
     # 词边界检查仅对纯 ASCII 查询生效（CJK 无空格分界概念）
     _ascii = query_lc.isascii()
 
-    # 2. 前缀匹配
-    if name_lc.startswith(query_lc):
-        if not _ascii or len(query_lc) >= len(name_lc) or not name_lc[len(query_lc)].isalnum():
+    # 2. 前缀匹配（归一化版本：连字符→空格）
+    if name_norm.startswith(query_norm):
+        if not _ascii or len(query_norm) >= len(name_norm) or not name_norm[len(query_norm)].isalnum():
             bonus = max(0, MatchScore.PREFIX_MAX_BONUS - len(query_lc) * MatchScore.PREFIX_BONUS_FACTOR)
             return MatchScore.PREFIX_BASE + bonus
 
-    # 2.5 全词匹配
+    # 2.5 全词匹配（归一化版本）
     if _ascii:
-        word_pat = re.compile(r'(?<![a-z0-9])' + re.escape(query_lc) + r'(?![a-z0-9])')
-        if word_pat.search(name_lc):
+        word_pat = re.compile(r'(?<![a-z0-9])' + re.escape(query_norm) + r'(?![a-z0-9])')
+        if word_pat.search(name_norm):
             return MatchScore.WHOLE_WORD_BASE
 
-    # 3. 包含查询词
-    pos = name_lc.find(query_lc)
+    # 3. 包含查询词（归一化版本）
+    pos = name_norm.find(query_norm)
     if pos >= 0:
         if not _ascii or (
-            (pos == 0 or not name_lc[pos - 1].isalnum()) and
-            (pos + len(query_lc) >= len(name_lc) or not name_lc[pos + len(query_lc)].isalnum())
+            (pos == 0 or not name_norm[pos - 1].isalnum()) and
+            (pos + len(query_norm) >= len(name_norm) or not name_norm[pos + len(query_norm)].isalnum())
         ):
             pos_bonus = max(0, MatchScore.CONTAINS_MAX_POS_BONUS - pos)
             return MatchScore.CONTAINS_BASE + pos_bonus
@@ -3629,9 +3642,9 @@ def _score_and_filter(results: dict, content_type: str, query_keyword: str) -> l
     scored = []
     for platform, hits in results.items():
         for h in hits:
-            # 过滤 MC百科 安全验证（captcha）空数据
+            # 过滤 MC百科 安全验证/限流空数据
             h_name = h.get("name_zh") or h.get("name") or ""
-            if platform == "mcmod.cn" and h_name == "安全验证中":
+            if platform == "mcmod.cn" and h_name in ("安全验证", "安全验证中", "访问间隔过短，请稍后再试"):
                 continue
 
             score = _score_relevance(query_keyword, h, content_type=content_type)
