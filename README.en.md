@@ -50,7 +50,7 @@ mc-search --json show sodium --deps               # Dependencies
 mc-search --json wiki enchanting -r               # Wiki search+read
 ```
 
-`search` supports `--type mod/item/modpack/shader/resourcepack/vanilla`, `--cache` for caching.
+`search` supports `--type mod/item/modpack/shader/resourcepack/vanilla/entity/biome/dimension`, `--cache` for caching.
 
 ## Project Structure
 
@@ -59,8 +59,8 @@ mc-search-skill/
 ├── skills/mc-search/
 │   ├── SKILL.md               # Agent invocation definition
 │   ├── scripts/
-│   │   ├── core.py             # Search/parse/fuse/cache (~3700 lines)
-│   │   └── cli.py              # CLI entry (~1200 lines)
+│   │   ├── core.py             # Search/parse/fuse/cache (~3850 lines)
+│   │   └── cli.py              # CLI entry (~1290 lines)
 │   └── references/            # Error codes/platform comparison/result schema
 ├── README.md
 └── README.en.md

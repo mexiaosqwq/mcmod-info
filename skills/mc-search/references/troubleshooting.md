@@ -139,7 +139,7 @@ curl -s -H "User-Agent: mc-search/5.1.0" "https://minecraft.wiki/api.php?action=
 **优化建议**：
 - 使用 `--cache` 减少网络请求
 - 避免频繁重复请求
-- 超时时间：默认 12 秒，可适当调整
+- 超时时间：默认 15 秒，可适当调整
 
 ## Modrinth 搜索结果不准确
 

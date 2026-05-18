@@ -20,8 +20,8 @@ Agent 调用 → core.py API → 并行平台搜索 → 跨语言桥接(CJK) →
 ```
 
 两个核心文件（均在 `skills/mc-search/scripts/`）：
-- `core.py` — 全部搜索逻辑（API 调用、HTML 解析、结果融合、缓存），约 3750 行
-- `cli.py` — argparse 薄壳（Agent 不使用，仅人类调试用），约 1200 行
+- `core.py` — 全部搜索逻辑（API 调用、HTML 解析、结果融合、缓存），约 3850 行
+- `cli.py` — argparse 薄壳（Agent 不使用，仅人类调试用），约 1290 行
 
 参考文档：`skills/mc-search/references/` — 错误码、平台对比、返回字段 Schema
 
@@ -37,12 +37,12 @@ sys.path.insert(0, 'skills/mc-search')
 from scripts import core
 
 # 多平台搜索（推荐）
-result = core.search_all("机械动力", max_per_source=5, content_type="mod", fuse=True)
+result = core.search_all("机械动力", max_per_source=10, content_type="mod", fuse=True)
 # → {"results": [...], "platform_stats": {"mcmod.cn": {...}, "modrinth": {...}, ...}}
 
 # 单平台搜索（通过 content_type 路由，不裸调 set_platform_enabled）
 # core.set_platform_enabled(mcmod=False, wiki=False, wiki_zh=False)  # 仅需完全自定义时用
-result = core.search_all("sodium", max_per_source=5, content_type="mod")
+result = core.search_all("sodium", max_per_source=10, content_type="mod")
 ```
 
 `content_type` 可选：`mod` / `item` / `modpack` / `shader` / `resourcepack` / `vanilla` / `entity` / `biome` / `dimension`。

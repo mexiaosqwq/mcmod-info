@@ -1,6 +1,6 @@
 ---
 name: mc-search
-version: "5.3.0-dev"
+version: "5.2.0-dev"
 description: >
   Minecraft 聚合搜索：五平台并行搜索模组、整合包、光影、材质包、原版 Wiki 攻略，自动融合去重后返回结构化结果。
   当用户询问任何 Minecraft 相关内容（模组/整合包/光影/材质包/MC百科/Modrinth/原版 wiki/我的世界攻略/下载量/依赖关系）时使用此 skill。
@@ -27,16 +27,16 @@ sys.path.insert(0, 'skills/mc-search')
 from scripts import core
 
 # 搜索模组（最常用）
-r = core.search_all("机械动力", max_per_source=5, content_type="mod", fuse=True)
+r = core.search_all("机械动力", max_per_source=10, content_type="mod", fuse=True)
 # → {"results": [{name, name_zh, name_en, url, _sources, _score, is_primary, description, downloads, ...}], "platform_stats": {...}}
 
 # 英文搜索同样
-r = core.search_all("sodium", max_per_source=5, content_type="mod", fuse=True)
+r = core.search_all("sodium", max_per_source=10, content_type="mod", fuse=True)
 
 # 其他 content_type
-r = core.search_all("钻石", max_per_source=5, content_type="item", fuse=True)       # 物品
-r = core.search_all("SkyFactory", max_per_source=5, content_type="modpack", fuse=True)  # 整合包
-r = core.search_all("Complementary", max_per_source=5, content_type="shader", fuse=True) # 光影
+r = core.search_all("钻石", max_per_source=10, content_type="item", fuse=True)       # 物品
+r = core.search_all("SkyFactory", max_per_source=10, content_type="modpack", fuse=True)  # 整合包
+r = core.search_all("Complementary", max_per_source=10, content_type="shader", fuse=True) # 光影
 
 # Modrinth 详情
 info = core.fetch_mod_info("sodium")

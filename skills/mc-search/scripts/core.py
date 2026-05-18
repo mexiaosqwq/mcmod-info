@@ -3303,7 +3303,7 @@ def search_all(keyword: str, max_per_source: int | None = None, timeout: int = 1
     """
     四平台并行搜索，返回统一格式。
     timeout: 整体超时秒数
-    content_type: "mod" | "item" | "modpack" | "entity" | "biome" | "dimension" | "shader" | "resourcepack"
+    content_type: "mod" | "item" | "modpack" | "vanilla" | "entity" | "biome" | "dimension" | "shader" | "resourcepack"
       - 同时决定每平台最大结果数（_DEFAULT_RESULTS_PER_PLATFORM）
       - shader/resourcepack 仅搜索 Modrinth
       - modpack 仅搜索 MC百科 + Modrinth
@@ -3314,7 +3314,7 @@ def search_all(keyword: str, max_per_source: int | None = None, timeout: int = 1
     if not keyword or not keyword.strip():
         return {"results": [], "platform_stats": {}}
 
-    # 默认值 None 表示"使用平台默认结果数"（_DEFAULT_RESULTS_PER_PLATFORM=5）
+    # 默认值 None 表示"使用平台默认结果数"（_DEFAULT_RESULTS_PER_PLATFORM=10）
     per_source = max_per_source if max_per_source is not None else _DEFAULT_RESULTS_PER_PLATFORM
     results = {"mcmod.cn": [], "modrinth": [], "minecraft.wiki": [], "minecraft.wiki/zh": []}
     stats = {"mcmod.cn": {"total": 0, "returned": 0},
