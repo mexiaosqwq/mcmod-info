@@ -22,10 +22,10 @@ _OUTPUT_DIR = os.environ.get(
 )
 
 # CLI 默认值（网络请求和显示配置）
-_DEFAULT_RESULTS_PER_PLATFORM = 5  # AI-first: Agent 场景不需要大量结果
+_DEFAULT_RESULTS_PER_PLATFORM = 10  # AI-first: Agent 场景不需要大量结果
 _DEFAULT_TIMEOUT = 15
 _DEFAULT_WIKI_MAX = 5
-_DEFAULT_PARAGRAPHS = 20
+_DEFAULT_PARAGRAPHS = 200
 _EXACT_SEARCH_MAX = 5
 
 # 显示截断配置（控制输出长度）
@@ -311,6 +311,36 @@ def _json_out(obj, is_json: bool):
 
 
 # ── 显示函数 ──────────────────────────────────────────
+
+_PLATFORM_LABELS = {
+    "mcmod.cn": "MC百科", "modrinth": "Modrinth",
+    "minecraft.wiki": "Minecraft Wiki (EN)", "minecraft.wiki/zh": "Minecraft Wiki (ZH)",
+}
+
+_PLATFORM_ORDER = ["mcmod.cn", "modrinth", "minecraft.wiki", "minecraft.wiki/zh"]
+
+
+def _print_search_summary(keyword: str, stats: dict, hits: list):
+    """在文本模式搜索结果开头打印总数概览。"""
+    total = len(hits)
+    parts = []
+    for p in _PLATFORM_ORDER:
+        s = stats.get(p, {})
+        returned = s.get("returned", 0)
+        if returned <= 0:
+            continue
+        label = _PLATFORM_LABELS.get(p, p)
+        api_total = s.get("total", 0)
+        if api_total > returned:
+            parts.append(f"{label} {returned}/{api_total}")
+        else:
+            parts.append(f"{label} {returned}")
+    platform_str = " / ".join(parts) if parts else ""
+    if platform_str:
+        print(f"\n搜索 \"{keyword}\" — 共 {total} 条（{platform_str}）\n")
+    else:
+        print(f"\n搜索 \"{keyword}\" — 共 {total} 条\n")
+
 
 def _type_badge(hit: dict) -> str:
     ptype = hit.get("type", "mod")
@@ -951,6 +981,7 @@ def _cmd_search_keyword(args):
         else:
             if not hits:
                 _fail(f"{args.platform} 无 [{args.keyword}] 相关结果", "NO_RESULTS", args.json)
+            _print_search_summary(args.keyword, result.get("platform_stats", {}), hits)
             for hit in hits:
                 _print_hit(hit)
         return
@@ -964,6 +995,7 @@ def _cmd_search_keyword(args):
     else:
         if not results.get("results"):
             _fail(f"所有平台均无 [{args.keyword}] 相关结果", "NO_RESULTS", args.json)
+        _print_search_summary(args.keyword, results.get("platform_stats", {}), results["results"])
         for hit in results["results"]:
             _print_hit(hit)
 
@@ -979,7 +1011,9 @@ def _cmd_search(args):
 # show 命令
 # ============================================================
 def _cmd_show(args):
-    name = args.name
+    name = (args.name or "").strip()
+    if not name:
+        _fail("错误: 项目名称不能为空", "EMPTY_NAME", args.json)
     ident = _parse_project_identifier(name)
 
     # ── --deps 快捷路径：只查 Modrinth 依赖 ──
@@ -1052,7 +1086,7 @@ def _cmd_wiki(args):
         if args.json:
             _json_out({"results": content}, args.json)
         elif "_error" in content:
-            _print_error(f"读取失败: {content['_error']}", "READ_ERROR", args.json)
+            _fail(f"读取失败: {content['_error']}", "READ_ERROR", args.json)
         else:
             print(f"[{content['name']}]")
             print(f"  {content['url']}")
@@ -1101,6 +1135,7 @@ def _cmd_wiki(args):
             hits[0]["read_content"] = content
         _json_out({"results": hits}, args.json)
     else:
+        _print_search_summary(keyword, result.get("platform_stats", {}), hits)
         for i, hit in enumerate(hits[:_DISPLAY_WIKI_MAX_RESULTS], 1):
             name = hit.get("name_zh") or hit.get("name_en") or hit.get("name", "?")
             source = hit.get("source", "")

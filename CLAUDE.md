@@ -1,20 +1,15 @@
 # CLAUDE.md
 
-本文件为 Claude Code (claude.ai/code) 提供本代码库的工作指导。
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 项目定位
 
-**mc-search** 是 AI Agent 优先的 Minecraft 内容搜索 Skill。AI Agent 通过 Python API 直接调用，不依赖 CLI。
-
-并行搜索五个平台：
-- **MC 百科** (mcmod.cn) — 中文模组/物品/整合包（HTML 解析，脆弱，有 WAF 回退）
-- **Modrinth** — 英文模组/光影/材质包/整合包（REST API，稳定）
-- **bbsmc.net** — Modrinth 中国社区 Fork（API 兼容，中文名+简介补充源，不参与搜索）
-- **minecraft.wiki** — 原版游戏 wiki 英文/中文（MediaWiki API）
+**mc-search** 是 AI Agent 优先的 Minecraft 内容搜索 Skill。AI Agent 通过 Python API 直接调用，不依赖 CLI。五平台并行：MC百科 / Modrinth / bbsmc.net / minecraft.wiki EN / minecraft.wiki ZH。
 
 核心特性：
 - **跨语言桥接**：中文关键词自动从 MC百科 提取 `name_en` 去 Modrinth 补搜，Agent 透明
-- **字段级权威源融合**：`_merge_entry_fields()` 逐字段选源（name_zh→MC百科, name_en→Modrinth, description→bbsmc, downloads→Modrinth, relationships→MC百科, snippet/icon_url/changelogs/supported_versions/author→Modrinth, followers→Modrinth）
+- **本体判别**：`is_primary: true` C→B→A→兜底 四级联标记本体模组
+- **字段级权威源融合**：`_merge_entry_fields()` 逐字段选源，不按单一平台优先
 - **错误信号透明**：统一 `_error` 键区分 `not_found`/`api_failed`/`parse_failed`，不用 `None`
 
 ## 架构
@@ -24,9 +19,11 @@ Agent 调用 → core.py API → 并行平台搜索 → 跨语言桥接(CJK) →
                                     └─ MC百科 → name_en → Modrinth 补搜（透明）
 ```
 
-两个文件：
-- `skills/mc-search/scripts/core.py` — 全部搜索逻辑（API 调用、HTML 解析、结果融合、缓存）
-- `skills/mc-search/scripts/cli.py` — argparse 薄壳（Agent 不使用，仅人类调试用）
+两个核心文件（均在 `skills/mc-search/scripts/`）：
+- `core.py` — 全部搜索逻辑（API 调用、HTML 解析、结果融合、缓存），约 3750 行
+- `cli.py` — argparse 薄壳（Agent 不使用，仅人类调试用），约 1200 行
+
+参考文档：`skills/mc-search/references/` — 错误码、平台对比、返回字段 Schema
 
 ## Agent 使用方式
 
@@ -50,7 +47,7 @@ result = core.search_all("sodium", max_per_source=5, content_type="mod")
 
 `content_type` 可选：`mod` / `item` / `modpack` / `shader` / `resourcepack` / `vanilla` / `entity` / `biome` / `dimension`。
 
-返回的每个 hit 关键字段：`name`、`name_zh`、`name_en`、`url`、`source`、`source_id`、`_score`（相关性 0-150+）、`_sources`（来源平台列表）、`snippet`/`description`。
+返回的每个 hit 关键字段：`name`、`name_zh`、`name_en`、`url`、`source`、`source_id`、`_score`、`_sources`、`is_primary`、`snippet`/`description`。
 
 ### 详情：`fetch_mod_info()` / `get_mod_dependencies()`
 
@@ -105,18 +102,19 @@ core.set_platform_enabled(mcmod=True, modrinth=True, wiki=True, wiki_zh=True)
 # Agent 不应裸调 set_platform_enabled，应通过 search_all 的 content_type 自动路由
 ```
 
-## JSON 返回格式（统一信封）
-
-所有结果均为 `{"results": ..., ...}` 结构。错误为 `{"error": "CODE", "message": "..."}`。
+## JSON 返回格式
 
 | 函数 | `results` 类型 | 附加字段 |
 |------|---------------|---------|
 | `search_all(fuse=True)` | `[{hit}]` | `platform_stats` |
+| `search_all(fuse=False)` | `{mcmod.cn: [...], modrinth: {...}, ...}` | `platform_stats` |
+| `search_modrinth` | `{results: [...], total: N, returned: M}` | — |
 | `fetch_mod_info()` | `{dict}` | — |
 | `get_mod_dependencies()` | `{deps: {...}}` | — |
-| `search_wiki()` | `[{hit}]` | — |
-| `read_wiki()` | `{dict}` | — |
-| `search_mcmod()` | `[{hit}]` | — |
+
+失败时返回 `{"_error": "not_found"}` / `{"_error": "api_failed"}`（Agent 端用 `_is_valid()` 统一判断）。
+
+> `search_modrinth` 是唯一返回 `dict` 信封（含 `total`/`returned`）的搜索函数，`search_all` 内部会拆包。
 
 ## 重要实现细节
 
@@ -157,7 +155,7 @@ CLI 端用 `_is_valid(info)` 统一判断（非 None + 不含 `_error` 键）。
 ## 性能注意事项
 
 - `search_modrinth()` 内部对每个搜索结果并行获取详情（`_parallel_fetch_with_fallback`，最多 4 workers）
-- `search_all()` 并行提交 4 平台任务
+- `search_all()` 并行提交平台任务（最多 4 平台，由 content_type 决定）
 - Modrinth API 速率限制：360 请求/小时
 - MC百科 无速率限制但 CDN 可能限流
 
@@ -194,67 +192,21 @@ assert len(r2["results"]) > 0
 - `curl_cffi>=0.15.0`（MC百科 + wiki 必需）
 - 其余标准库
 
-## 行为准则（所有修改必须遵循）
+## 行为准则
 
-### 极简主义
-- 不添加任务范围外的功能、重构或抽象。Bug 修复不需要周边清理
-- 三行相似代码优于过早抽象。一次性操作不需要辅助函数
-- 不做半成品实现。不设计未来假想需求
-
-### 编辑优先于新建
-- 总是先考虑修改现有文件，非必要时不创建新文件
-- 不改 CLI：Agent 不经过 CLI，功能迭代只改 core.py API
-
-### 信任内部代码
-- 不为不可能发生的场景添加错误处理、回退或验证
-- 信任内部代码和框架保证。仅在系统边界（用户输入、外部 API）验证
-
-### 注释克制
-- 默认不写注释。仅在 WHY 不明显时添加（隐藏约束、微妙不变量、特定 Bug workaround）
-- 不写多段 docstring 或多行注释块。最多一行简注
-- 不解释 WHAT 代码做什么（好的命名已做到这点）
-- 删除过时注释（引用已完成的 Phase、已移除功能等）——它们是死知识
-
-### 不留向后兼容包袱
-- 彻底删除无用代码。不重命名 `_vars`、不重导出类型、不加 `// removed` 注释
-- 确认某物未被使用时直接删除，不做软废弃
-
-### 专用工具优先
-- 文件操作必须用 Read / Edit / Write / Glob / Grep，不用 Bash 的 cat / grep / sed / awk
-- Bash 仅用于真正需要 shell 的操作（git、npm、pip、curl）
-
-### 修改前瞻后顾
-- 改一处前 grep 所有引用点，确认无遗漏
-- 修改后运行测试验证（Python API 方式）
-- 参考 clean-code-review.md 中的已知问题，不引入新的 [HIGH] 问题
-
-### 复杂任务先规划
-- 多文件修改 / 重构 / 批量修复必须先走 workflow-execute-plans
-- 分批执行 + 每批验证 + 暂停等待反馈
-- 单行修复 / 单文件小改可跳过
-
-### 验证后才报告完成
-- 测试 golden path 和边界情况
-- 无法实际验证时明确说明，不声称成功
-- 测试/状态检查等辅助工作派子 agent，不占主上下文
-
-### AI 优先
-- 所有设计决策以 AI Agent 调用体验为第一位
-- 默认参数针对 AI 场景优化（小结果集、合理超时、稳定输出）
-- 参数命名一致性比人类 CLI 灵活性更重要
+- **极简主义**：不添加任务外的功能/重构/抽象。三行相似优于过早抽象。不做半成品
+- **编辑优先于新建**：功能迭代只改 core.py API，不改 CLI
+- **信任内部代码**：仅在系统边界（用户输入、外部 API）验证。不处理内部不可能的场景
+- **注释克制**：默认不写。仅 WHY 不明显时一行简注。删除过时注释
+- **不留向后兼容包袱**：彻底删除无用代码，不做软废弃
+- **专用工具优先**：文件操作用 Read/Edit/Write/Glob，Bash 仅用于 git/pip/curl
+- **修改前瞻后顾**：改前 grep 所有引用，改后 Python API 验证
+- **复杂任务先规划**：多文件修改走 workflow-execute-plans，分批+验证+暂停
+- **验证后才报告完成**：测试 golden path + 边界情况。辅助工作派子 agent，不占主上下文
+- **AI 优先**：默认参数针对 AI Agent 场景优化（少结果、合理超时）
 
 ## Agent skills
 
-> `docs/agents/` 下文件为本地配置（gitignored），通过 `/setup-matt-pocock-skills` 生成。新克隆的仓库需先运行该命令。
+> `docs/agents/` 下文件为本地配置（gitignored）。
 
-### Issue tracker
-
-Issues live in GitHub Issues at `mexiaosqwq/mc-search-skill`. Use the `gh` CLI for all operations. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-All five canonical labels use their default names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). `wontfix` already exists in the repo; the other four are new. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context layout — `CONTEXT.md` 已存在（领域模型），`docs/adr/` 按需创建。
+Issues 在 GitHub Issues `mexiaosqwq/mc-search-skill`。领域模型见 `CONTEXT.md`。

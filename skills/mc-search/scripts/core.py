@@ -81,7 +81,7 @@ _MAX_CC_PAGE_LEN = 10000                 # CC check 页面最大长度阈值
 _MCMOD_RETRY_CODES = (403, 502, 503)     # MC百科可重试的 HTTP 状态码
 _SEARCH_CHANGELOG_LIMIT = 3
 _SKIP_MCMOD_ORG_NAMES = {"CaffeineMC"}  # 排除的非作者组织名
-_DEFAULT_RESULTS_PER_PLATFORM = 5   # AI-first: Agent 场景默认，cli.py 也有一份同值常量
+_DEFAULT_RESULTS_PER_PLATFORM = 10  # AI-first: Agent 场景默认，cli.py 也有一份同值常量
 
 # Wiki 解析
 _WIKI_SNIPPET_SEGMENT_LEN = 5000
@@ -97,7 +97,7 @@ _MAX_MCMOD_AUTHORS = 10
 _KNOWN_LOADERS = {"fabric", "forge", "neoforge", "quilt"}
 _WIKI_SNIPPET_REPLACE_THRESHOLD = 50   # 直接命中 snippet 低于此长度时用 API snippet 替换
 _WIKI_SNIPPET_KEEP_THRESHOLD = 60       # API snippet 低于此长度不替换
-_MAX_WIKI_INTRO_PARAGRAPHS = 3
+_MAX_WIKI_INTRO_PARAGRAPHS = 5
 
 # CDN 绕过配置
 _CURL_IMPERSONATE = "chrome124"               # curl_cffi 模拟的浏览器 TLS 指纹版本
@@ -246,6 +246,9 @@ class MatchScore(IntEnum):
     PREFIX_BASE = 60
     PREFIX_MAX_BONUS = 15
     PREFIX_BONUS_FACTOR = 2
+
+    # 全词匹配（词边界检查，防止 "OreSpawn" 匹配 "spawn"）
+    WHOLE_WORD_BASE = 45
 
     # 包含匹配
     CONTAINS_BASE = 30
@@ -764,7 +767,7 @@ def _parse_mcmod_item_result(html: str, url: str, name: str) -> dict:
     if info_idx >= 0:
         info_section = html[info_idx:info_idx + _MAX_INFO_TABLE_SECTION]
         # 资料分类
-        cat_m = re.search(r'资料分类：</td><td[^>]*>([^<]+)<', info_section)
+        cat_m = re.search(r'资料分类：</td><td[^>]*>(?:<a[^>]*?>)?([^<]+)', info_section)
         if cat_m:
             category = cat_m.group(1).strip()
         # 最大耐久
@@ -776,7 +779,7 @@ def _parse_mcmod_item_result(html: str, url: str, name: str) -> dict:
         if stack_m:
             max_stack = int(stack_m.group(1).replace(",", ""))
         # 所属模组
-        mod_links = re.findall(r'href="(/class/\d+\.html)"[^>]*>([^<]+)<', info_section)
+        mod_links = re.findall(r'href="(/class/\d+\.html)"[^>]*>([^<]+)<', html)
         if mod_links:
             mod_url = "https://www.mcmod.cn" + mod_links[0][0]
             mod_name = mod_links[0][1].strip()
@@ -1895,6 +1898,12 @@ def _backfill_bbsmc_names(results: list[dict]):
             cn_m = re.match(r'^(.+?)\s*[-–—]\s*\S+', bbsmc_name)
             if cn_m and _is_cjk(cn_m.group(1)):
                 result["_name_zh_cn"] = cn_m.group(1).strip()
+            # 修复 bbsmc 双语名污染 name_en（如 "机械动力 - Create"、"机械动力 – Create"）
+            if _is_cjk(result.get("name_en", "")):
+                parts = re.split(r'\s*[-–—]\s*', bbsmc_name, 1)
+                if len(parts) == 2 and not _is_cjk(parts[1]):
+                    result["name_en"] = parts[1].strip()
+                    result["name"] = parts[1].strip()
             bbsmc_summary = bd.get("summary", "")
             if bbsmc_summary and result["description"] in ("", result.get("snippet", "")):
                 result["description"] = bbsmc_summary[:_MAX_SEARCH_DESC_CHARS]
@@ -2375,7 +2384,7 @@ def search_modrinth_author(username: str, max_results: int = 10) -> list[dict]:
 @_cached(lambda mod_id, project_id=None: ("mod", _cache_key("deps", mod_id)))
 def get_mod_dependencies(mod_id: str, project_id: str = None) -> dict:
     """
-    获取 mod 依赖树。
+    获取 mod 正向依赖（从最新版本提取）。
     返回 {"deps": {mod_slug: {id, name, slug, client_side, server_side, url}}}
     失败时返回 {"deps": {}, "_error": "not_found"}
     """
@@ -2385,30 +2394,49 @@ def get_mod_dependencies(mod_id: str, project_id: str = None) -> dict:
             return {"deps": {}, "_error": "not_found"}
         project_id = proj.get("id", mod_id)
 
+    # 获取最新版本的正向依赖（?limit=1 保证返回最新版本）
+    versions = _fetch_json(
+        f"https://api.modrinth.com/v2/project/{project_id}/version?limit=1", default=[])
+    if not versions:
+        return {"deps": {}, "_error": "not_found"}
+
+    latest = versions[0] if isinstance(versions, list) else versions
+    dep_entries = latest.get("dependencies", [])
+
+    # 过滤：仅保留正向依赖（排除 incompatible）
+    valid_ids = []
+    for dep in dep_entries:
+        if dep.get("dependency_type", "") in ("required", "optional", "embedded"):
+            pid = dep.get("project_id", "")
+            if pid:
+                valid_ids.append(pid)
+
+    if not valid_ids:
+        return {"deps": {}}
+
+    # 批量获取依赖项目元数据（1 次 API 调用替代 N 次）
+    ids_json = json.dumps(valid_ids)
+    dep_projects = _fetch_json(
+        f"https://api.modrinth.com/v2/projects?ids={urllib.parse.quote(ids_json)}",
+        default=[])
+    if not dep_projects:
+        return {"deps": {}}
+
     deps = {}
-    deps_data = _fetch_json(f"https://api.modrinth.com/v2/project/{project_id}/dependencies")
-    if not deps_data:
-        return {"deps": {}, "_error": "api_failed"}
-
-    for dep_proj in deps_data.get("projects", []):
-        slug = dep_proj.get("slug", "")
-        dep_id = dep_proj.get("id", "")
-        client = dep_proj.get("client_side", "unknown")
-        server = dep_proj.get("server_side", "unknown")
-
+    for dp in dep_projects:
+        slug = dp.get("slug", "")
+        dep_id = dp.get("id", "")
         key = slug or dep_id
         deps[key] = {
-            "name": dep_proj.get("title", slug or dep_id),
+            "name": dp.get("title", slug or dep_id),
             "slug": slug,
             "id": dep_id,
-            "client_side": client,
-            "server_side": server,
+            "client_side": dp.get("client_side", "unknown"),
+            "server_side": dp.get("server_side", "unknown"),
             "url": f"https://modrinth.com/mod/{slug}" if slug else None,
-            # 不再派生 "type" 字段，因为它有误导性
         }
 
-    result = {"deps": deps}
-    return result
+    return {"deps": deps}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -2939,6 +2967,15 @@ def _extract_intro_paragraphs(content_html: str, para_skip_prefixes: tuple, sour
 
     intro_paragraphs = []
 
+    # 提取 hatnote/msgbox 消歧义提示（如 "本条目介绍的是..."）
+    for note_div in re.findall(
+        r'<div[^>]+(?:class="[^"]*(?:hatnote|msgbox|ambox)[^"]*"|role="note")[^>]*>(.*?)</div>',
+        pre_heading_html, re.DOTALL
+    ):
+        clean = _clean_html_text(note_div)
+        if len(clean) >= 4 and not clean.startswith("Wiki上"):
+            intro_paragraphs.append(clean)
+
     for p in re.findall(r"<p[^>]*>(.*?)</p>", pre_heading_html, re.DOTALL):
         if re.search(r"<script|application/ld\+json", p, re.IGNORECASE):
             continue
@@ -3031,23 +3068,48 @@ def _extract_section_paragraphs(section_html: str, para_skip_prefixes: tuple, so
             if len(section_paragraphs) >= _MAX_SECTION_PARAGRAPHS:
                 break
 
-    # 英文 wiki：从 <li> 中提取描述性条目
-    if source == "minecraft.wiki" and not section_paragraphs:
+    # 英文 wiki：从 <li> 中提取描述性条目（始终提取，不仅回退）
+    if source == "minecraft.wiki":
         for li in re.findall(r"<li[^>]*>(.*?)</li>", section_html, re.DOTALL):
             clean = _clean_html_text(li)
             if len(clean) >= _MIN_DESCRIPTIVE_LI_LEN and re.match(
                     r"^(Added|Changed|Fixed|Updated|Removed|Introduced|Can now|Made|New|Affects?|Allows?|Prevents?|Makes?|Provides?)", clean):
                 section_paragraphs.append(clean)
-                break
+                if len(section_paragraphs) >= _MAX_SECTION_PARAGRAPHS:
+                    break
 
-    # 中文 wiki：从 <li> 中提取列表内容
-    if source != "minecraft.wiki" and not section_paragraphs:
+    # 中文 wiki：始终从 <li> 提取（不少章节用 <ul>/<li> 承载主要内容）
+    if source != "minecraft.wiki":
         for li in re.findall(r"<li[^>]*>(.*?)</li>", section_html, re.DOTALL):
             clean = _clean_html_text(li)
-            if len(clean) >= _MIN_PARAGRAPH_LEN_ZH and not clean.startswith(("[", "编辑", "注：")):
+            if len(clean) >= 4 and not clean.startswith(("[", "编辑", "注：")):
                 section_paragraphs.append(clean)
-                if len(section_paragraphs) >= 5:
+                if len(section_paragraphs) >= _MAX_SECTION_PARAGRAPHS:
                     break
+
+    # <dd> 提取：命令参考页用 <dl>/<dd> 承载主要语法内容
+    for dd in re.findall(r"<dd[^>]*>(.*?)</dd>", section_html, re.DOTALL):
+        clean = _clean_html_text(dd)
+        if len(clean) >= 4 and not clean.startswith(("[", "编辑", "注：")):
+            section_paragraphs.append(clean)
+            if len(section_paragraphs) >= _MAX_SECTION_PARAGRAPHS:
+                break
+
+    # <dt> 提取：定义列表术语（如命令参数名、附魔等级标签）
+    for dt in re.findall(r"<dt[^>]*>(.*?)</dt>", section_html, re.DOTALL):
+        clean = _clean_html_text(dt)
+        if len(clean) >= 3 and not clean.startswith(("[", "编辑", "注：")):
+            section_paragraphs.append(clean)
+            if len(section_paragraphs) >= _MAX_SECTION_PARAGRAPHS:
+                break
+
+    # <pre> 提取：代码块、数据组件 JSON、战利品表
+    for pre in re.findall(r"<pre[^>]*>(.*?)</pre>", section_html, re.DOTALL):
+        clean = _clean_html_text(pre)
+        if len(clean) >= 20:
+            section_paragraphs.append(clean)
+            if len(section_paragraphs) >= _MAX_SECTION_PARAGRAPHS:
+                break
 
     return section_paragraphs
 
@@ -3146,7 +3208,7 @@ def _read_wiki_impl(url: str, max_paragraphs: int,
 
     m_content = re.search(
         r'<div[^>]+id="mw-content-text"[^>]*>(.*?)'
-        r'(?:<div[^>]+class="[^"]*navbox|<div[^>]+id="catlinks|<div[^>]+class="[^"]*printfooter)',
+        r'(?:<div[^>]+class="[^"]*(?<![a-z-])navbox(?![a-z-])[^"]*"|<div[^>]+id="catlinks|<div[^>]+class="[^"]*printfooter)',
         html, re.DOTALL
     )
     if not m_content:
@@ -3225,7 +3287,7 @@ def read_wiki_zh(url: str, max_paragraphs: int = -1, include_infobox: bool = Tru
     url = _add_variant_param(url)  # 确保返回简体中文
     return _read_wiki_impl(
         url, max_paragraphs,
-        para_skip_prefixes=("历史", "编辑", "History of", "v ", "[edit"),
+        para_skip_prefixes=("历史", "编辑", "请帮助", "History of", "v ", "[edit"),
         heading_skip_ids=_WIKI_ZH_HEADING_SKIP_IDS,
         source="minecraft.wiki/zh",
         include_infobox=include_infobox,
@@ -3422,7 +3484,8 @@ def _calc_name_score(name_lc: str, query_lc: str) -> int:
 
     评分逻辑:
     - 精确匹配: 100 + 短名称奖励
-    - 前缀匹配: 60 + 短名称奖励
+    - 前缀匹配: 60 + 短名称奖励（ASCII 查询需词边界，防止 "spawn" 匹配 "spawning"）
+    - 全词匹配: 45（仅 ASCII，防止 "OreSpawn" 匹配 "spawn"）
     - 包含查询词: 30 + 位置奖励
     - 名称被包含: 20
     """
@@ -3434,16 +3497,30 @@ def _calc_name_score(name_lc: str, query_lc: str) -> int:
         bonus = max(0, MatchScore.EXACT_MATCH_MAX_BONUS - len(name_lc) * MatchScore.EXACT_MATCH_BONUS_FACTOR)
         return MatchScore.EXACT_MATCH_BASE + bonus
 
+    # 词边界检查仅对纯 ASCII 查询生效（CJK 无空格分界概念）
+    _ascii = query_lc.isascii()
+
     # 2. 前缀匹配
     if name_lc.startswith(query_lc):
-        bonus = max(0, MatchScore.PREFIX_MAX_BONUS - len(query_lc) * MatchScore.PREFIX_BONUS_FACTOR)
-        return MatchScore.PREFIX_BASE + bonus
+        if not _ascii or len(query_lc) >= len(name_lc) or not name_lc[len(query_lc)].isalnum():
+            bonus = max(0, MatchScore.PREFIX_MAX_BONUS - len(query_lc) * MatchScore.PREFIX_BONUS_FACTOR)
+            return MatchScore.PREFIX_BASE + bonus
+
+    # 2.5 全词匹配
+    if _ascii:
+        word_pat = re.compile(r'(?<![a-z0-9])' + re.escape(query_lc) + r'(?![a-z0-9])')
+        if word_pat.search(name_lc):
+            return MatchScore.WHOLE_WORD_BASE
 
     # 3. 包含查询词
     pos = name_lc.find(query_lc)
     if pos >= 0:
-        pos_bonus = max(0, MatchScore.CONTAINS_MAX_POS_BONUS - pos)
-        return MatchScore.CONTAINS_BASE + pos_bonus
+        if not _ascii or (
+            (pos == 0 or not name_lc[pos - 1].isalnum()) and
+            (pos + len(query_lc) >= len(name_lc) or not name_lc[pos + len(query_lc)].isalnum())
+        ):
+            pos_bonus = max(0, MatchScore.CONTAINS_MAX_POS_BONUS - pos)
+            return MatchScore.CONTAINS_BASE + pos_bonus
 
     # 4. 名称被包含
     if len(name_lc) >= MatchScore.MIN_LENGTH_FOR_CONTAINED and name_lc in query_lc:
@@ -3501,6 +3578,14 @@ def _score_relevance(query: str, hit: dict, content_type: str = "mod") -> float:
     platform = hit.get("_platform", hit.get("source", ""))
     if content_type == "item" and platform in ("minecraft.wiki", "minecraft.wiki/zh"):
         score += MatchScore.WIKI_ITEM_BONUS
+
+    # 5. MC百科 类别加权：冒险/装饰类常因名字巧合匹配，降低权重
+    cats = hit.get("categories", [])
+    if cats:
+        for cat in cats:
+            if cat in ("冒险Mod", "装饰Mod"):
+                score -= 10
+                break
 
     return score
 
@@ -3600,6 +3685,8 @@ def _merge_entry_fields(entries: list[dict]) -> dict:
 
     def _field_from(primary_src, fallback_src, field):
         v = (by_platform.get(primary_src) or {}).get(field) or ""
+        if field == "name_en" and _is_cjk(v):
+            v = ""  # 拒绝含 CJK 的 name_en，回退到备选源
         return v or (by_platform.get(fallback_src) or {}).get(field) or ""
 
     # 以最高分条目为基础，覆盖权威字段
