@@ -54,7 +54,7 @@ _MAX_VERSION_GROUPS = 5
 _MAX_CHANGELOGS = 5
 _MAX_FETCH_WORKERS = 4
 _BBSMC_API = "https://api.bbsmc.net/v3"
-_MAX_SCREENSHOTS = 0        # 默认不返回截图（可配置）
+_MODRINTH_API = "https://api.modrinth.com/v2"
 _MAX_GALLERY = 0            # 默认不返回画廊（可配置）
 _MAX_TAG_SECTION_LEN = 500
 _EXTERNAL_LINK_EXCLUDE_DOMAINS = ["curseforge", "modrinth", "github", "discord", "wikipedia", "mcbbs", "jenkins", "archive"]
@@ -210,18 +210,10 @@ def _build_mcmod_fallback_result(url: str, name: str, meta: dict | None = None,
     return result
 
 
-def _truncate_screenshots(screenshots: list, max_count: int) -> tuple[list, dict | None]:
-    """截断截图列表并返回截断元信息。返回 (limited_list, truncated_meta_or_None)。"""
-    limited = screenshots[:max_count]
-    total = len(screenshots)
-    meta = {"screenshots": {"returned": max_count, "total": total}} if total > max_count else None
-    return limited, meta
-
-
-def _build_truncated_meta(screenshots_meta: dict | None, description: str,
+def _build_truncated_meta(description: str,
                           max_chars: int) -> dict | None:
-    """构建截断元信息。无截断时返回 None。"""
-    truncated = dict(screenshots_meta) if screenshots_meta else {}
+    """构建描述截断元信息。无截断时返回 None。"""
+    truncated = {}
     if description and len(description) > max_chars:
         truncated["description"] = {"returned": max_chars, "total": len(description)}
     return truncated or None
@@ -505,7 +497,6 @@ def set_platform_enabled(mcmod: bool = True, modrinth: bool = True, wiki: bool =
 _MCMOD_SESSION = None
 _MCMOD_BYPASSED = False
 _MCMOD_LOCK = threading.Lock()
-_CURL_IMPERSONATE_FALLBACKS = ["chrome131", "chrome120", "safari17_0"]
 
 
 def _mcmod_host(url: str) -> str:
@@ -845,8 +836,6 @@ def _parse_mcmod_item_result(html: str, url: str, name: str) -> dict:
                     break
 
     # 截图截断信息
-    screenshots_limited, screenshots_meta = _truncate_screenshots(screenshots, _MAX_SCREENSHOTS)
-
     result = {
         "name": name_zh or raw_title or name,
         "name_en": name_en,
@@ -856,7 +845,7 @@ def _parse_mcmod_item_result(html: str, url: str, name: str) -> dict:
         "source_id": re.search(r"/item/(\d+)", url).group(1) if url else "",
         "type": "item",
         "cover_image": cover_image,
-        "screenshots": screenshots_limited,
+        "screenshots": [],
         "category": category,
         "max_durability": max_durability,
         "max_stack": max_stack,
@@ -867,7 +856,7 @@ def _parse_mcmod_item_result(html: str, url: str, name: str) -> dict:
     }
 
     # 截断元信息
-    truncated = _build_truncated_meta(screenshots_meta, description, _MAX_SEARCH_DESC_CHARS)
+    truncated = _build_truncated_meta(description, _MAX_SEARCH_DESC_CHARS)
     if truncated:
         result["_truncated"] = truncated
 
@@ -878,17 +867,10 @@ def _parse_mcmod_item_result(html: str, url: str, name: str) -> dict:
 
 
 def _extract_mcmod_cover(html: str) -> tuple[str, list[str]]:
-    """提取封面图和截图。返回 (cover_image, screenshots)。"""
+    """提取封面图。返回 (cover_image, [])。"""
     cover_m = re.search(r'class="class-cover-image"[^>]*>.*?<img[^>]+src="([^"]+)"', html, re.DOTALL)
     cover_image = cover_m.group(1) if cover_m else ""
-    # 截图默认禁用时跳过正则提取
-    if _MAX_SCREENSHOTS <= 0:
-        return cover_image, []
-    screenshots = []
-    for attr in ['data-src', 'data-lazy-src', 'data-original']:
-        screenshots.extend(re.findall(f'{attr}="([^"]+)"', html))
-    screenshots = list(dict.fromkeys(screenshots))
-    return cover_image, screenshots
+    return cover_image, []
 
 
 def _extract_mcmod_modpack_metadata(html: str) -> tuple[str, str, str, str, list[str]]:
@@ -936,7 +918,7 @@ def _extract_mcmod_modpack_description(html: str) -> str:
     return "\n".join(lines)
 
 
-def _extract_mcmod_modpack_stats(html: str) -> list[str]:
+def _extract_mcmod_modpack_versions(html: str) -> list[str]:
     """提取整合包支持的游戏版本列表。"""
     supported_versions = []
     version_section_idx = html.find("版本列表")
@@ -963,13 +945,10 @@ def _parse_mcmod_modpack_result(html: str, url: str, name: str) -> dict:
     description = _extract_mcmod_modpack_description(html)
 
     # 统计信息（仅版本列表）
-    supported_versions = _extract_mcmod_modpack_stats(html)
+    supported_versions = _extract_mcmod_modpack_versions(html)
 
     # 整合包类型判定（是否为 MC百科官方收录的整合包）
     is_official_modpack = bool(re.search(r'/modpack/\d+\.html', url))
-
-    # 截图截断信息
-    screenshots_limited, screenshots_meta = _truncate_screenshots(screenshots, _MAX_SCREENSHOTS)
 
     result = {
         "name": name_zh or name,
@@ -981,7 +960,7 @@ def _parse_mcmod_modpack_result(html: str, url: str, name: str) -> dict:
         "type": "modpack",
         "is_official": is_official_modpack,
         "cover_image": cover_image,
-        "screenshots": screenshots_limited,
+        "screenshots": [],
         "supported_versions": supported_versions,
         "categories": categories,
         "author": author,
@@ -992,7 +971,7 @@ def _parse_mcmod_modpack_result(html: str, url: str, name: str) -> dict:
     }
 
     # 截断元信息
-    truncated = _build_truncated_meta(screenshots_meta, description, _MAX_SEARCH_DESC_CHARS)
+    truncated = _build_truncated_meta(description, _MAX_SEARCH_DESC_CHARS)
     if truncated:
         result["_truncated"] = truncated
 
@@ -1490,9 +1469,6 @@ def _parse_mcmod_mod_result(html: str, url: str, name: str) -> dict:
     # 原版内容识别：class/1 是 MC百科"原版内容"分类
     is_vanilla = bool(re.search(r"/class/1\.html", url))
 
-    # 截图截断信息
-    screenshots_limited, screenshots_meta = _truncate_screenshots(screenshots, _MAX_SCREENSHOTS)
-
     result = {
         "name": name_zh or raw_title or name,
         "name_en": name_en,
@@ -1503,7 +1479,7 @@ def _parse_mcmod_mod_result(html: str, url: str, name: str) -> dict:
         "type": "mod",
         "is_vanilla": is_vanilla,
         "cover_image": cover_image,
-        "screenshots": screenshots_limited,
+        "screenshots": [],
         "supported_versions": supported_versions,
         "categories": categories,
         "tags": tags,
@@ -1520,7 +1496,7 @@ def _parse_mcmod_mod_result(html: str, url: str, name: str) -> dict:
     }
 
     # 截断元信息
-    truncated = _build_truncated_meta(screenshots_meta, description, _MAX_SEARCH_DESC_CHARS)
+    truncated = _build_truncated_meta(description, _MAX_SEARCH_DESC_CHARS)
     if truncated:
         result["_truncated"] = truncated
 
@@ -1952,7 +1928,7 @@ def search_modrinth(keyword: str, max_results: int = 5, project_type: str = "mod
     每个结果包含完整description（与MC百科齐平）。详情（body+changelogs）并行获取。
     """
     q = urllib.parse.quote(keyword)
-    url = f"https://api.modrinth.com/v2/search?query={q}&index=relevance&limit={max_results}"
+    url = f"{_MODRINTH_API}/search?query={q}&index=relevance&limit={max_results}"
     data = _fetch_json(url, {"hits": []})
     if not data or "hits" not in data:
         return {"results": [], "total": 0, "returned": 0}
@@ -2241,7 +2217,7 @@ def _build_modrinth_result(data: dict, project_id: str, body: str, gallery: list
 
 def _format_modrinth_versions(project_id: str, no_limit: bool) -> dict:
     """获取并格式化Modrinth版本信息"""
-    versions = _fetch_json(f"https://api.modrinth.com/v2/project/{project_id}/version?max={_MAX_VERSIONS_FETCH}", [])
+    versions = _fetch_json(f"{_MODRINTH_API}/project/{project_id}/version?max={_MAX_VERSIONS_FETCH}", [])
     if not versions:
         return {}
 
@@ -2300,7 +2276,7 @@ def _format_modrinth_versions(project_id: str, no_limit: bool) -> dict:
 
 def _fetch_modrinth_team_author(project_id: str) -> str:
     """从团队成员中获取作者"""
-    team = _fetch_json(f"https://api.modrinth.com/v2/project/{project_id}/members", [])
+    team = _fetch_json(f"{_MODRINTH_API}/project/{project_id}/members", [])
     for m in team:
         if m.get("role") in ("Owner", "Developer", "Project Lead"):
             return m.get("user", {}).get("username") or m.get("user", {}).get("name", "")
@@ -2315,7 +2291,7 @@ def fetch_mod_info(mod_id: str, no_limit: bool = False) -> dict | None:
     no_limit: True 时返回完整数据，False 时使用默认限制并返回 _truncated 元信息。
     """
     # API调用
-    raw = curl(f"https://api.modrinth.com/v2/project/{mod_id}")
+    raw = curl(f"{_MODRINTH_API}/project/{mod_id}")
     if raw is None:
         return {"_error": "api_failed"}
     if not raw:
@@ -2389,7 +2365,7 @@ def search_modrinth_author(username: str, max_results: int = 10) -> list[dict]:
     """Modrinth作者搜索。返回作者作品列表。"""
     q = urllib.parse.quote(username)
     # colon in filter=authors: must stay unencoded
-    url = f"https://api.modrinth.com/v2/search?query={q}&filter=authors:{q}&index=relevance&limit={max_results}"
+    url = f"{_MODRINTH_API}/search?query={q}&filter=authors:{q}&index=relevance&limit={max_results}"
     data = _fetch_json(url)
     if not data or "hits" not in data:
         return []
@@ -2417,14 +2393,14 @@ def get_mod_dependencies(mod_id: str, project_id: str = None) -> dict:
     失败时返回 {"deps": {}, "_error": "not_found"}
     """
     if not project_id:
-        proj = _fetch_json(f"https://api.modrinth.com/v2/project/{mod_id}")
+        proj = _fetch_json(f"{_MODRINTH_API}/project/{mod_id}")
         if not proj:
             return {"deps": {}, "_error": "not_found"}
         project_id = proj.get("id", mod_id)
 
     # 获取最新版本的正向依赖（?limit=1 保证返回最新版本）
     versions = _fetch_json(
-        f"https://api.modrinth.com/v2/project/{project_id}/version?limit=1", default=[])
+        f"{_MODRINTH_API}/project/{project_id}/version?limit=1", default=[])
     if not versions:
         return {"deps": {}, "_error": "not_found"}
 
@@ -2445,7 +2421,7 @@ def get_mod_dependencies(mod_id: str, project_id: str = None) -> dict:
     # 批量获取依赖项目元数据（1 次 API 调用替代 N 次）
     ids_json = json.dumps(valid_ids)
     dep_projects = _fetch_json(
-        f"https://api.modrinth.com/v2/projects?ids={urllib.parse.quote(ids_json)}",
+        f"{_MODRINTH_API}/projects?ids={urllib.parse.quote(ids_json)}",
         default=[])
     if not dep_projects:
         return {"deps": {}}
@@ -2575,8 +2551,8 @@ def _add_variant_param(url: str) -> str:
     return url + separator + "variant=zh-hans"
 
 
-def _make_wiki_result(name, url, source, source_id, snippet, sections,
-                      title_field=""):
+def _build_wiki_result(name, url, source, source_id, snippet, sections,
+                       title_field=""):
     """构造 wiki 搜索结果 dict。title_field 决定哪个 name 字段填入标题。"""
     return {
         "name": name,
@@ -2638,7 +2614,7 @@ def _wiki_direct_access(
     if add_variant and article_url:
         article_url = _add_variant_param(article_url)
 
-    result = _make_wiki_result(
+    result = _build_wiki_result(
         name=page_title,
         url=article_url or "",
         source=source,
@@ -2682,7 +2658,7 @@ def _wiki_api_search(
             article_url = f"{base_url}/w/{urllib.parse.quote(title.replace(' ', '_'))}"
             if add_variant:
                 article_url = _add_variant_param(article_url)
-            results.append(_make_wiki_result(
+            results.append(_build_wiki_result(
                 name=title,
                 url=article_url,
                 source=source,

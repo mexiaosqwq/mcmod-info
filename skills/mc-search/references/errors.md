@@ -19,7 +19,6 @@
 | `READ_ERROR` | wiki 页面读取失败 | 检查 URL 或稍后重试 |
 | `DISABLED` | 请求的平台已禁用 | 启用对应平台或更换平台 |
 
-> 注：CLI 错误码在 HTTP 200 下以 JSON `{"error": "...", "message": "..."}` 返回，与 shell exit code 0 配合。
 > 注：`CAPTCHA` 和 `INVALID_INPUT` 是 `_show_mcmod()` 内部返回码，不作为 CLI `_fail` 错误码。
 
 ## API `_error` 键（`_error` 字段，core.py）
