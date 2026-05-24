@@ -100,7 +100,7 @@ rm -rf ~/.cache/mc-search/
 
 **验证网络**：
 ```bash
-curl -s -H "User-Agent: mc-search/5.1.0" "https://minecraft.wiki/api.php?action=query&list=search&srsearch=Diamond&format=json" | head -c 300
+curl -s -H "User-Agent: mc-search/5.4.0-dev" "https://minecraft.wiki/api.php?action=query&list=search&srsearch=Diamond&format=json" | head -c 300
 ```
 
 **建议**：
