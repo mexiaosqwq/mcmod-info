@@ -59,8 +59,8 @@ mc-search-skill/
 ├── skills/mc-search/
 │   ├── SKILL.md               # Agent invocation definition
 │   ├── scripts/
-│   │   ├── core.py             # Search/parse/fuse/cache (~3850 lines)
-│   │   └── cli.py              # CLI entry (~1290 lines)
+│   │   ├── core.py             # Search/parse/fuse/cache (~4000 lines)
+│   │   └── cli.py              # CLI entry (~1350 lines)
 │   └── references/            # Error codes/platform comparison/result schema
 ├── README.md
 └── README.en.md
