@@ -38,6 +38,14 @@ HTTP_HEADERS = {
 }
 
 
+def _make_headers(extra: dict | None = None) -> dict:
+    """构建标准 HTTP 请求头，可选合并额外字段。"""
+    headers = dict(HTTP_HEADERS)
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 # 常量定义
 MIN_HTML_LEN = 1000         # 来源: 正常页面3-8KB，错误页<500B；核心检测阈值
 MIN_HTML_LEN_ITEM = 500     # 来源: 物品页无侧边栏，结构更紧凑
@@ -225,6 +233,15 @@ def _build_truncated_meta(description: str,
     if description and len(description) > max_chars:
         truncated["description"] = {"returned": max_chars, "total": len(description)}
     return truncated or None
+
+
+def _apply_truncation(result: dict, field: str, max_chars: int) -> None:
+    """对 result 中的指定字段进行截断，并添加 _truncated 元信息。原地修改。"""
+    value = result.get(field)
+    if value and len(value) > max_chars:
+        full_len = len(value)
+        result[field] = value[:max_chars]
+        result.setdefault("_truncated", {})[field] = {"returned": max_chars, "total": full_len}
 
 
 def _clean_mcmod_html(content: str) -> str:
@@ -569,11 +586,7 @@ def _bypass_mcmod_cdn(timeout: int = 15) -> bool:
         if _MCMOD_SESSION is None:
             _MCMOD_SESSION = curl_requests.Session()
 
-    headers = {
-        "User-Agent": HTTP_HEADERS["User-Agent"],
-        "Accept": HTTP_HEADERS["Accept"],
-        "Accept-Language": HTTP_HEADERS["Accept-Language"],
-    }
+    headers = _make_headers()
 
     try:
         r = _MCMOD_SESSION.get(
@@ -600,22 +613,29 @@ def _bypass_mcmod_cdn(timeout: int = 15) -> bool:
         return False
 
 
+def _reset_mcmod_session():
+    """重置 MC百科 CDN 绕过状态和 session。用于失败后清理。"""
+    global _MCMOD_BYPASSED, _MCMOD_SESSION
+    with _MCMOD_LOCK:
+        _MCMOD_BYPASSED = False
+        _MCMOD_SESSION = None
+
+
 def _curl_mcmod(url: str, timeout: int = 10) -> str:
     """使用 curl_cffi 请求 *.mcmod.cn，自动绕过 CDN 盾（各子域名独立绕过）。"""
     global _MCMOD_BYPASSED, _MCMOD_SESSION
 
-    headers = {
-        "User-Agent": HTTP_HEADERS["User-Agent"],
-        "Accept": HTTP_HEADERS["Accept"],
-        "Accept-Language": HTTP_HEADERS["Accept-Language"],
-    }
+    headers = _make_headers()
 
     for attempt in range(_CDN_BYPASS_RETRIES):
-        if not _MCMOD_BYPASSED:
+        # 检查是否已绕过 CDN — 必须在锁内读取，避免多线程竞态
+        with _MCMOD_LOCK:
+            already_bypassed = _MCMOD_BYPASSED
+
+        if not already_bypassed:
             if not _bypass_mcmod_cdn(timeout=timeout):
                 if attempt == 0:
-                    with _MCMOD_LOCK:
-                        _MCMOD_SESSION = None
+                    _reset_mcmod_session()
                     continue
                 return ""
 
@@ -627,18 +647,14 @@ def _curl_mcmod(url: str, timeout: int = 10) -> str:
                 r = _MCMOD_SESSION.get(url, impersonate=_CURL_IMPERSONATE, headers=headers, timeout=timeout)
         except Exception as e:
             logger.warning(f"MC百科请求失败 ({url}): {e}")
-            with _MCMOD_LOCK:
-                _MCMOD_BYPASSED = False
-                _MCMOD_SESSION = None
+            _reset_mcmod_session()
             continue
 
         text = r.text
 
         # Captcha / 限流页面：退避后重试（立即重试必撞墙）
         if '<title>安全验证</title>' in text[:2000] or '<title>访问间隔过短' in text[:2000]:
-            with _MCMOD_LOCK:
-                _MCMOD_BYPASSED = False
-                _MCMOD_SESSION = None
+            _reset_mcmod_session()
             if attempt < _CDN_BYPASS_RETRIES - 1:
                 time.sleep(1.0 + attempt)  # 1s, 2s 递增退避
             continue
@@ -662,9 +678,7 @@ def _curl_mcmod(url: str, timeout: int = 10) -> str:
                         return r.text
             except Exception as e:
                 logger.warning(f"CDN bypass post failed for {host}: {e}")
-            with _MCMOD_LOCK:
-                _MCMOD_BYPASSED = False
-                _MCMOD_SESSION = None
+                _reset_mcmod_session()
             continue
 
         return text
@@ -679,11 +693,7 @@ def _curl_wiki(url: str, timeout: int = 10) -> str:
     except ImportError:
         logger.error("curl_cffi 未安装，无法访问 minecraft.wiki")
         return ""
-    headers = {
-        "User-Agent": HTTP_HEADERS["User-Agent"],
-        "Accept": HTTP_HEADERS["Accept"],
-        "Accept-Language": HTTP_HEADERS["Accept-Language"],
-    }
+    headers = _make_headers()
     try:
         r = curl_requests.get(url, impersonate=_CURL_IMPERSONATE, headers=headers, timeout=timeout)
         return r.text
@@ -719,11 +729,7 @@ def curl(url: str, timeout: int = 10) -> str:
     try:
         req = urllib.request.Request(
             url,
-            headers={
-                "User-Agent": HTTP_HEADERS["User-Agent"],
-                "Accept": HTTP_HEADERS["Accept"],
-                "Accept-Language": HTTP_HEADERS["Accept-Language"],
-            }
+            headers=_make_headers()
         )
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.read().decode("utf-8", errors="replace")
@@ -1755,10 +1761,7 @@ def search_mcmod(keyword: str, max_results: int = 5, content_type: str = "mod") 
 
     # 7. 截断描述（控制 token 消耗）
     for r in results:
-        if r.get('description') and len(r['description']) > _MAX_SEARCH_DESC_CHARS:
-            full_len = len(r['description'])
-            r['description'] = r['description'][:_MAX_SEARCH_DESC_CHARS]
-            r.setdefault('_truncated', {})['description'] = {"returned": _MAX_SEARCH_DESC_CHARS, "total": full_len}
+        _apply_truncation(r, "description", _MAX_SEARCH_DESC_CHARS)
 
     return results
 

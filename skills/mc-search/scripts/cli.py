@@ -22,7 +22,6 @@ _OUTPUT_DIR = os.environ.get(
 )
 
 # CLI 默认值（网络请求和显示配置）
-_DEFAULT_RESULTS_PER_PLATFORM = 10  # AI-first: Agent 场景不需要大量结果
 _DEFAULT_TIMEOUT = 15
 _DEFAULT_WIKI_MAX = 5
 _DEFAULT_PARAGRAPHS = 200
@@ -868,14 +867,14 @@ def _show_full(name: str, ident: dict, *, skip_mr: bool = False,
     _output_full_result(result, is_json)
 
 
-def _show_default(name: str, ident: dict, *, no_mr: bool = False,
-                  no_mcmod: bool = False, is_json: bool = False):
+def _show_default(name: str, ident: dict, *, skip_mr: bool = False,
+                  skip_mcmod: bool = False, is_json: bool = False):
     """show 默认：Modrinth URL/slug→Modrinth，MC百科 URL/ID→MC百科。纯英文名优先Modrinth，中文名优先MC百科。"""
     saved_files = []
     # Modrinth 路径
     if ident["mr_slug"] is not None:
-        if no_mr:
-            _fail("已禁用 Modrinth（--no-mr）", "DISABLED", is_json)
+        if skip_mr:
+            _fail("已禁用 Modrinth（--skip-mr）", "DISABLED", is_json)
         slug = ident["mr_slug"]
         try:
             info = core.fetch_mod_info(slug, no_limit=True)
@@ -895,12 +894,12 @@ def _show_default(name: str, ident: dict, *, no_mr: bool = False,
     err_msg, err_type = f"未找到 [{name}] 的相关信息", "NOT_FOUND"
 
     for attempt in (first, second):
-        if attempt == "mcmod" and not no_mcmod:
+        if attempt == "mcmod" and not skip_mcmod:
             info, err_type, err_msg = _show_mcmod(name, ident)
             if _is_valid(info):
                 _print_mcmod_show_info(info, name, is_json=is_json)
                 return
-        elif attempt == "mr" and not no_mr and not ident["class_id"]:
+        elif attempt == "mr" and not skip_mr and not ident["class_id"]:
             hit = _search_modrinth_exact(name)
             if hit:
                 slug = hit.get("source_id") or hit.get("slug")
@@ -921,7 +920,7 @@ def _show_default(name: str, ident: dict, *, no_mr: bool = False,
 
 def _cmd_search_author(args):
     """作者搜索：双平台并行。"""
-    _effective_max = args.max if args.max is not None else _DEFAULT_RESULTS_PER_PLATFORM
+    _effective_max = args.max if args.max is not None else core._DEFAULT_RESULTS_PER_PLATFORM
     author = args.author_name.strip()
     if not author:
         _fail("错误: 作者名不能为空", "EMPTY_AUTHOR", args.json)
@@ -957,7 +956,7 @@ def _cmd_search_author(args):
 
 def _cmd_search_keyword(args):
     """关键词搜索：单平台或多平台。"""
-    _effective_max = args.max if args.max is not None else _DEFAULT_RESULTS_PER_PLATFORM
+    _effective_max = args.max if args.max is not None else core._DEFAULT_RESULTS_PER_PLATFORM
     if not args.keyword or not args.keyword.strip():
         _fail("错误: 搜索关键词不能为空", "EMPTY_KEYWORD", args.json)
     args.keyword = args.keyword.strip()
@@ -1057,8 +1056,8 @@ def _cmd_show(args):
 
     # ── 默认：按输入类型自动选平台 ──
     _show_default(name, ident,
-                  no_mr=args.no_mr,
-                  no_mcmod=args.no_mcmod,
+                  skip_mr=args.no_mr,
+                  skip_mcmod=args.no_mcmod,
                   is_json=args.json)
 
 
@@ -1208,7 +1207,7 @@ def _build_parser():
     search_parser.add_argument("--author", dest="author_name", default=None,
                    help="按作者搜索（MC百科+Modrinth）")
     search_parser.add_argument("-n", "--max", type=int, default=None,
-                   help=f"每平台最多结果（默认{_DEFAULT_RESULTS_PER_PLATFORM}）")
+                   help=f"每平台最多结果（默认{core._DEFAULT_RESULTS_PER_PLATFORM}）")
     search_parser.add_argument("--timeout", type=int, default=_DEFAULT_TIMEOUT,
                    help=f"超时秒数（默认{_DEFAULT_TIMEOUT}）")
 
