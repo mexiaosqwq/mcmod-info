@@ -27,7 +27,14 @@ logger = logging.getLogger(__name__)
 
 
 class SearchError(Exception):
-    """搜索过程中的可区分错误基类。"""
+    """搜索过程中的可区分错误基类。
+
+    在以下场景会被 raise：
+    - MC百科搜索结果页结构变化（无 search-result-list）
+    - MC百科无结果
+    - 作者搜索未找到作者页面
+    - 作者页面被防火墙拦截
+    """
     pass
 
 
@@ -47,25 +54,25 @@ def _make_headers(extra: dict | None = None) -> dict:
 
 
 # 常量定义
-MIN_HTML_LEN = 1000         # 来源: 正常页面3-8KB，错误页<500B；核心检测阈值
-MIN_HTML_LEN_ITEM = 500     # 来源: 物品页无侧边栏，结构更紧凑
-_MIN_PARAGRAPH_LEN = 20     # 来源: wiki解析，过滤导航/广告短文本
-_MIN_PARAGRAPH_LEN_ZH = 8   # 来源: 中文信息密度高，20字符对中文过严
-_MIN_SHORT_TEXT_LEN = 35    # 来源: 低于此长度视为无意义内容
-_MIN_DESCRIPTIVE_LI_LEN = 50  # 来源: 列表项需有足够描述性内容
-_MIN_DESCRIPTION_LINE_LEN = 10  # 来源: 描述文字单行最小长度
+MIN_HTML_LEN = 1000         # 正常页面3-8KB，错误页<500B；核心检测阈值
+MIN_HTML_LEN_ITEM = 500     # 物品页无侧边栏，结构更紧凑
+_MIN_PARAGRAPH_LEN = 20     # wiki 解析，过滤导航/广告短文本
+_MIN_PARAGRAPH_LEN_ZH = 8   # 中文信息密度高，20字符对中文过严
+_MIN_SHORT_TEXT_LEN = 35    # 低于此长度视为无意义内容
+_MIN_DESCRIPTIVE_LI_LEN = 50  # 列表项需有足够描述性内容
+_MIN_DESCRIPTION_LINE_LEN = 10  # 描述文字单行最小长度
 _MIN_SECTION_MARKER_DISTANCE = 200  # section marker 最小距离
 _MAX_SECTION_PARAGRAPHS = 100  # 每 wiki 章节最多段落数
-_MIN_TABLE_CELL_LEN = 2             # 来源: 表格单元格最小有意义内容长度
-_MAX_TABLE_ITEMS = 50               # 来源: 单个表格最大处理行数（性能保护）
-_MAX_VERSION_GROUPS = 5
-_MAX_CHANGELOGS = 5
-_MAX_FETCH_WORKERS = 4
-_BBSMC_API = "https://api.bbsmc.net/v3"
-_MODRINTH_API = "https://api.modrinth.com/v2"
+_MIN_TABLE_CELL_LEN = 2             # 表格单元格最小有意义内容长度
+_MAX_TABLE_ITEMS = 50               # 单个表格最大处理行数（性能保护）
+_MAX_VERSION_GROUPS = 5             # 版本组最大数量
+_MAX_CHANGELOGS = 5                 # 更新日志最大数量
+_MAX_FETCH_WORKERS = 4              # 详情并行获取最大 worker 数
+_BBSMC_API = "https://api.bbsmc.net/v3"  # bbsmc.net API 基础 URL
+_MODRINTH_API = "https://api.modrinth.com/v2"  # Modrinth API 基础 URL
 _MAX_GALLERY = 0            # 默认不返回画廊（可配置）
 _EMPTY_MODRINTH_RESULT = {"results": [], "total": 0, "returned": 0}  # 平台搜索失败时的空信封
-_MAX_TAG_SECTION_LEN = 500
+_MAX_TAG_SECTION_LEN = 500  # 标签区段最大长度
 _EXTERNAL_LINK_EXCLUDE_DOMAINS = ["curseforge", "modrinth", "github", "discord", "wikipedia", "mcbbs", "jenkins", "archive"]
 # MC百科外部链接分类规则：(匹配函数, key)。按顺序匹配第一个命中，key 已存在则跳过
 _SIMPLE_LINK_RULES = [
@@ -75,46 +82,46 @@ _SIMPLE_LINK_RULES = [
     (lambda u: "jenkins" in u.lower() or "ci." in u, "jenkins"),
     (lambda u: "mcbbs" in u, "mcbbs"),
 ]
-_MAX_TAG_TEXT_LEN = 20
-_MAX_SEARCH_SEGMENT = 2000
-_MAX_DESCRIPTION_SEGMENT = 70000
-_MAX_SEARCH_DESC_CHARS = 500
-_MAX_AUTHOR_SECTION = 50000
-_MAX_INFO_TABLE_SECTION = 2000
+_MAX_TAG_TEXT_LEN = 20      # 单个标签最大字符数
+_MAX_SEARCH_SEGMENT = 2000  # 搜索区段最大长度
+_MAX_DESCRIPTION_SEGMENT = 70000  # 描述区段最大长度
+_MAX_SEARCH_DESC_CHARS = 500  # 搜索结果描述最大字符数
+_MAX_AUTHOR_SECTION = 50000  # 作者区段最大长度
+_MAX_INFO_TABLE_SECTION = 2000  # 信息表区段最大长度
 _MAX_VERSION_SECTION_LEN = 3000  # 版本检索区域长度
-_MAX_VERSIONS_FETCH = 200
+_MAX_VERSIONS_FETCH = 200    # 版本列表最大获取数
 # 注：WAF 签名需保守选择。"折翼喵"在 MC百科 正常页脚中出现，此处不收录
-_WAF_SIGNATURES = ["AIWAFCDN", "防火墙拦截", "访问被拒绝"]
-_WAF_CC_CHECK = "CC check"               # MC百科 CDN 盾检测关键词
-_MIN_TOKEN_PAGE_LEN = 500                # yxd_token 页面长度阈值
-_MAX_CC_PAGE_LEN = 10000                 # CC check 页面最大长度阈值
-_MCMOD_RETRY_CODES = (403, 502, 503)     # MC百科可重试的 HTTP 状态码
-_SEARCH_CHANGELOG_LIMIT = 3
+_WAF_SIGNATURES = ["AIWAFCDN", "防火墙拦截", "访问被拒绝"]  # WAF/CDN 拦截页面特征签名
+_WAF_CC_CHECK = "CC check"  # MC百科 CDN 盾检测关键词
+_MIN_TOKEN_PAGE_LEN = 500   # yxd_token 页面长度阈值
+_MAX_CC_PAGE_LEN = 10000    # CC check 页面最大长度阈值
+_MCMOD_RETRY_CODES = (403, 502, 503)  # MC百科可重试的 HTTP 状态码
+_SEARCH_CHANGELOG_LIMIT = 3  # 搜索结果中更新日志数量限制
 _SKIP_MCMOD_ORG_NAMES = {"CaffeineMC"}  # 排除的非作者组织名
-_DEFAULT_RESULTS_PER_PLATFORM = 10  # AI-first: Agent 场景默认，cli.py 也有一份同值常量
+_DEFAULT_RESULTS_PER_PLATFORM = 10  # AI-first: Agent 场景默认结果数
 
 # Wiki 解析
-_WIKI_SNIPPET_SEGMENT_LEN = 5000
-_WIKI_FALLBACK_SEGMENT_LEN = 20000
+_WIKI_SNIPPET_SEGMENT_LEN = 5000  # 片段提取区段长度
+_WIKI_FALLBACK_SEGMENT_LEN = 20000  # 回退扫描区段长度
 _WIKI_FULL_SCAN_LEN = 60000       # 英文 wiki infobox 可达 30000+ 字符
-_WIKI_FIRST_TABLE_SEGMENT_LEN = 10000
-_MIN_SNIPPET_LINE_LEN = 30
-_MIN_CJK_SEGMENT_LEN = 8
-_MAX_CJK_FALLBACK_SEGMENTS = 3
-_MAX_WIKI_SECTIONS = 20
-_MAX_TABLES_PER_SECTION = 10
-_MAX_MCMOD_AUTHORS = 10
-_KNOWN_LOADERS = {"fabric", "forge", "neoforge", "quilt"}
+_WIKI_FIRST_TABLE_SEGMENT_LEN = 10000  # 首个表格区段长度
+_MIN_SNIPPET_LINE_LEN = 30        # 片段最小行长度
+_MIN_CJK_SEGMENT_LEN = 8          # CJK 文本最小区段长度
+_MAX_CJK_FALLBACK_SEGMENTS = 3    # CJK 回退最大区段数
+_MAX_WIKI_SECTIONS = 20           # 最大章节数
+_MAX_TABLES_PER_SECTION = 10      # 每章节最大表格数
+_MAX_MCMOD_AUTHORS = 10           # MC百科作者最大数量
+_KNOWN_LOADERS = {"fabric", "forge", "neoforge", "quilt"}  # 已知加载器集合
 _WIKI_SNIPPET_REPLACE_THRESHOLD = 50   # 直接命中 snippet 低于此长度时用 API snippet 替换
 _WIKI_SNIPPET_KEEP_THRESHOLD = 60       # API snippet 低于此长度不替换
-_MAX_WIKI_INTRO_PARAGRAPHS = 5
+_MAX_WIKI_INTRO_PARAGRAPHS = 5    # 引言最大段落数
 
 # CDN 绕过配置
-_CURL_IMPERSONATE = "chrome124"               # curl_cffi 模拟的浏览器 TLS 指纹版本
+_CURL_IMPERSONATE = "chrome124"  # curl_cffi 模拟的浏览器 TLS 指纹版本
 _MCMOD_CDN_SHIELD = "https://www.mcmod.cn/cdn-shield/check"  # CDN 盾验证端点
-_CC_CHECK_FIELDS = ["navigator", "userAgent", "windowWidth", "performance", "callPhantom"]
-_CDN_BYPASS_RETRIES = 3                  # CDN 绕过外层重试次数
-_CDN_RETRY_ATTEMPTS = 2                  # CC check 后重试原请求次数
+_CC_CHECK_FIELDS = ["navigator", "userAgent", "windowWidth", "performance", "callPhantom"]  # CC check 字段列表
+_CDN_BYPASS_RETRIES = 3  # CDN 绕过外层重试次数
+_CDN_RETRY_ATTEMPTS = 2  # CC check 后重试原请求次数
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -495,7 +502,12 @@ def _cached(make_key):
 
 
 def set_cache(enabled: bool, ttl: int = 3600):
-    """由 CLI 调用启用缓存。"""
+    """启用/禁用缓存系统。
+
+    Args:
+        enabled: True 启用缓存，False 禁用
+        ttl: 缓存存活时间（秒），默认 3600（1 小时）
+    """
     global _cache_enabled, _cache_ttl
     _cache_enabled = enabled
     _cache_ttl = ttl
@@ -507,7 +519,14 @@ _platform_enabled = {"mcmod.cn": True, "modrinth": True, "minecraft.wiki": True,
 
 
 def set_platform_enabled(mcmod: bool = True, modrinth: bool = True, wiki: bool = True, wiki_zh: bool = True):
-    """由 CLI 调用控制哪些平台启用。"""
+    """控制各平台搜索开关。
+
+    Args:
+        mcmod: MC百科开关
+        modrinth: Modrinth 开关
+        wiki: minecraft.wiki EN 开关
+        wiki_zh: minecraft.wiki ZH 开关
+    """
     global _platform_enabled
     _platform_enabled = {
         "mcmod.cn": mcmod,
@@ -703,11 +722,13 @@ def _curl_wiki(url: str, timeout: int = 10) -> str:
 
 
 def curl(url: str, timeout: int = 10) -> str:
-    """发起HTTP请求，返回HTML内容（失败返回空字符串）。
+    """发起 HTTP 请求，返回 HTML 内容（失败返回空字符串）。
 
-    - *.mcmod.cn：使用 curl_cffi + CDN 绕过
+    - www.mcmod.cn / search.mcmod.cn：使用 curl_cffi + CDN 绕过
     - minecraft.wiki / zh.minecraft.wiki：使用 curl_cffi 绕过反爬
     - 其他 URL：标准 urllib.request
+
+    MC百科详情页 HTML 会在缓存启用时自动缓存（TTL 由 set_cache 控制）。
     """
     # MC百科详情页 HTML 缓存（最贵请求，绕过 CDN 前先查缓存）
     if _cache_enabled and "://www.mcmod.cn/class/" in url:
@@ -1768,7 +1789,17 @@ def search_mcmod(keyword: str, max_results: int = 5, content_type: str = "mod") 
 
 @_cached(lambda author_name, max_mods=20: ("search", _cache_key("mcmod_author", author_name, max_mods)))
 def search_mcmod_author(author_name: str, max_mods: int = 20) -> list[dict]:
-    """MC百科按作者搜索。返回模组列表。"""
+    """MC百科按作者搜索。返回该作者在 MC百科收录的所有模组列表。
+
+    Args:
+        author_name: 作者名（需精确匹配）
+        max_mods: 最大返回模组数，默认 20
+
+    Returns:
+        模组列表，每项含 name, name_en, name_zh, url, source, source_id, type,
+        description, status, source_type, author, categories, tags, supported_versions,
+        cover_image, screenshots, relationships, has_changelog, external_links 等字段。
+    """
     q = urllib.parse.quote(author_name)
     html = curl(f"https://search.mcmod.cn/s?key={q}&filter=0")
     if not html or len(html) < MIN_HTML_LEN:
@@ -2409,7 +2440,16 @@ def _build_modrinth_info_result(data: dict, no_limit: bool = False) -> dict:
 
 @_cached(lambda username, max_results=10: ("search", _cache_key("author", username, max_results)))
 def search_modrinth_author(username: str, max_results: int = 10) -> list[dict]:
-    """Modrinth作者搜索。返回作者作品列表。"""
+    """Modrinth 按作者搜索。返回该作者在 Modrinth 的所有作品列表。
+
+    Args:
+        username: 作者用户名（需精确匹配）
+        max_results: 最大返回作品数，默认 10
+
+    Returns:
+        作品列表，每项含 name, name_en, url, source, source_id, type,
+        description, downloads, followers, icon_url, author, supported_versions 等字段。
+    """
     q = urllib.parse.quote(username)
     # colon in filter=authors: must stay unencoded
     url = f"{_MODRINTH_API}/search?query={q}&filter=authors:{q}&index=relevance&limit={max_results}"
@@ -2777,7 +2817,15 @@ def _search_wiki_impl(
 
 
 def search_wiki(keyword: str, max_results: int = 5) -> list[dict]:
-    """minecraft.wiki 搜索（英文）。"""
+    """minecraft.wiki 英文 wiki 搜索。
+
+    Args:
+        keyword: 搜索关键词
+        max_results: 最大返回结果数，默认 5
+
+    Returns:
+        结果列表，每项含 name, name_en, url, source, source_id, type, snippet, sections
+    """
     return _search_wiki_impl(
         keyword=keyword,
         base_url="https://minecraft.wiki",
@@ -2790,7 +2838,15 @@ def search_wiki(keyword: str, max_results: int = 5) -> list[dict]:
 
 
 def search_wiki_zh(keyword: str, max_results: int = 5) -> list[dict]:
-    """minecraft.wiki/zh 中文 wiki 搜索。"""
+    """minecraft.wiki/zh 中文 wiki 搜索。
+
+    Args:
+        keyword: 搜索关键词
+        max_results: 最大返回结果数，默认 5
+
+    Returns:
+        结果列表，每项含 name, name_en, url, source, source_id, type, snippet, sections
+    """
     return _search_wiki_impl(
         keyword=keyword,
         base_url="https://zh.minecraft.wiki",

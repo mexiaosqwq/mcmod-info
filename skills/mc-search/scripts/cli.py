@@ -177,7 +177,8 @@ def _fmt_desc(info: dict) -> list | None:
         lines.append(f"    {clean}")
     return lines
 
-def _fmt_deps(info):
+def _fmt_deps(info: dict) -> list | None:
+    """格式化依赖/前置模组字段输出。返回要打印的行列表，或 None 跳过。"""
     rel = info.get("relationships")
     if not rel:
         return ["  依赖：无（暂无关联模组）"]
@@ -194,13 +195,15 @@ def _fmt_deps(info):
             lines.append(f"    - {dep_entry['name_zh']} ({dep_entry['name_en']})  {dep_entry['url']}")
     return lines or ["  依赖：无（暂无关联模组）"]
 
-def _fmt_versions(info):
+def _fmt_versions(info: dict) -> list | None:
+    """格式化支持版本字段输出。返回要打印的行列表。"""
     vers = info.get("supported_versions", [])
     if vers:
         return [f"  支持版本（{len(vers)}）：{', '.join(vers)}"]
     return ["  支持版本：无数据"]
 
-def _fmt_cats(info):
+def _fmt_cats(info: dict) -> list | None:
+    """格式化分类/标签字段输出。返回要打印的行列表，或 None 跳过。"""
     cats = info.get("categories", [])
     tags = info.get("tags", [])
     if cats or tags:
@@ -210,7 +213,8 @@ def _fmt_cats(info):
         return lines
     return ["  分类/标签：无数据"]
 
-def _fmt_gallery(info):
+def _fmt_gallery(info: dict) -> list | None:
+    """格式化封面/截图画廊字段输出。返回要打印的行列表，或 None 跳过。"""
     lines = []
     cover = info.get("cover_image", "")
     shots = info.get("screenshots", [])
@@ -222,7 +226,8 @@ def _fmt_gallery(info):
             lines.append(f"    {s}")
     return lines or None
 
-def _fmt_source(info):
+def _fmt_source(info: dict) -> list | None:
+    """格式化 Class ID 字段输出。返回要打印的行列表，或 None 跳过。"""
     lines = []
     # 平台和链接已由 _fmt_title 输出，此处只输出 Class ID
     sid = info.get("source_id", "")
@@ -348,6 +353,7 @@ def _type_badge(hit: dict) -> str:
 
 
 def _print_hit(hit: dict):
+    """文本模式打印单个搜索结果条目。包含名称、平台、标签、描述、封面、截图等。"""
     name = hit.get("name_zh") or hit.get("name", "?")
     en = hit.get("name_en", "")
     src = hit.get("source", "")
@@ -418,6 +424,7 @@ def _print_hit(hit: dict):
 
 
 def _print_deps(deps: dict, mod_name: str = ""):
+    """文本模式打印模组依赖列表。展示依赖名、运行环境（客户端/服务端）、URL。"""
     dep_dict = deps.get("deps", {})
     if not dep_dict:
         print(f"[{mod_name}] 无声明依赖")
@@ -434,7 +441,7 @@ def _print_deps(deps: dict, mod_name: str = ""):
 
 
 def _print_mr_stats(mr: dict):
-    """打印 Modrinth 统计信息 + 双端支持。"""
+    """打印 Modrinth 模组统计信息：下载量、关注数、作者、许可协议，以及客户端/服务端支持状态。"""
     print(f"\n  统计:")
     print(f"    下载: {mr.get('downloads', 0):>10,} 次")
     print(f"    关注: {mr.get('followers', 0):>10,} 人")
@@ -453,7 +460,7 @@ def _print_mr_stats(mr: dict):
 
 
 def _print_mr_body(mr: dict, saved_files: list = None):
-    """打印 Modrinth 正文预览。"""
+    """打印 Modrinth 模组正文预览。超过阈值时自动保存到文件，并显示摘要。"""
     body = mr.get('body', '')
     if not body:
         return
@@ -484,7 +491,7 @@ def _print_mr_body(mr: dict, saved_files: list = None):
 
 
 def _print_mr_versions(mr: dict):
-    """打印 Modrinth 版本信息 + 更新日志。"""
+    """打印 Modrinth 模组版本信息（游戏版本、加载器）和最近更新日志。"""
     version_groups = mr.get("version_groups", [])
     if version_groups:
         print(f"\n  版本信息 (展示前{min(_DISPLAY_MAX_VERSIONS, len(version_groups))}个，共{len(version_groups)}个):")
@@ -509,7 +516,7 @@ def _print_mr_versions(mr: dict):
 
 
 def _print_mr_gallery(mr: dict):
-    """打印 Modrinth 截图画廊。"""
+    """打印 Modrinth 模组截图画廊列表。"""
     gallery = mr.get('gallery', [])
     if not gallery:
         return
@@ -523,6 +530,7 @@ def _print_mr_gallery(mr: dict):
 
 
 def _print_full_modrinth_info(mr: dict, saved_files: list = None):
+    """文本模式打印 Modrinth 模组完整信息：统计、正文、分类、版本、画廊、相关链接。"""
     print(f"\n【Modrinth - {mr.get('name', '?')}】")
     print(f"  平台: {mr.get('url', '')}")
 
@@ -550,7 +558,7 @@ def _print_full_modrinth_info(mr: dict, saved_files: list = None):
 
 
 def _print_mcmod_desc(mc: dict, full_desc: bool = False, saved_files: list = None):
-    """打印 MC百科模组描述。"""
+    """打印 MC百科模组描述/简介。超过阈值时自动保存到文件，并显示摘要。"""
     desc = mc.get('description', '')
     if not desc:
         return
@@ -582,7 +590,7 @@ def _print_mcmod_desc(mc: dict, full_desc: bool = False, saved_files: list = Non
 
 
 def _print_mcmod_team(mc: dict):
-    """打印 MC百科模组开发团队。"""
+    """打印 MC百科模组开发团队成员列表，包括姓名和角色。"""
     author_team = mc.get('author_team', [])
     if author_team:
         print(f"  开发团队（{len(author_team)} 人）：")
@@ -596,6 +604,7 @@ def _print_mcmod_team(mc: dict):
 
 
 def _print_full_mcmod_info(mc: dict, full_desc: bool = False, saved_files: list = None):
+    """文本模式打印 MC百科模组完整信息：简介、版本、分类标签、开发团队。"""
     print(f"\n【MC百科 - {mc.get('name_zh')}】")
     print(f"  平台: {mc.get('url', '')}")
 
@@ -697,7 +706,7 @@ def _fetch_mcmod_info(class_id: str, mcmod_name: str) -> tuple[dict, list, str]:
 
 
 def _print_integrations(integrations: list):
-    """打印 MC百科联动模组列表。"""
+    """打印 MC百科联动模组列表。包含名称、简介、URL。"""
     print(f"  联动模组（{len(integrations)} 个）：")
     for int_mod in integrations:
         int_name = int_mod.get('name_zh') or int_mod.get('name_en', '?')
@@ -712,7 +721,7 @@ def _print_integrations(integrations: list):
 
 
 def _output_full_result(result: dict, is_json: bool):
-    """输出双平台全量结果（JSON 或文本）。"""
+    """输出双平台（MC百科 + Modrinth）全量结果。JSON 模式输出纯数据，文本模式格式化打印。"""
     if is_json:
         output = {k: v for k, v in result.items() if not k.startswith("_")}
         print(json.dumps({"results": output}, ensure_ascii=False))
@@ -811,7 +820,16 @@ def _print_mcmod_show_info(info: dict, name: str, *, is_json: bool = False,
 def _show_full(name: str, ident: dict, *, skip_mr: bool = False,
                skip_dep: bool = False, skip_mcmod: bool = False,
                is_json: bool = False):
-    """show --full 双平台全量输出。"""
+    """show --full 模式：同时查询 MC百科 和 Modrinth，输出双平台完整信息 + 依赖关系。
+
+    Args:
+        name: 原始项目名称
+        ident: 解析后的项目标识符（class_id/mcmod_name/mr_slug）
+        skip_mr: 是否跳过 Modrinth 查询
+        skip_dep: 是否跳过依赖查询
+        skip_mcmod: 是否跳过 MC百科 查询
+        is_json: 是否以 JSON 格式输出
+    """
     result = {"mcmod": None, "modrinth": None, "dependencies": None, "saved_files": []}
 
     # Modrinth URL：直接 slug 获取
@@ -869,7 +887,20 @@ def _show_full(name: str, ident: dict, *, skip_mr: bool = False,
 
 def _show_default(name: str, ident: dict, *, skip_mr: bool = False,
                   skip_mcmod: bool = False, is_json: bool = False):
-    """show 默认：Modrinth URL/slug→Modrinth，MC百科 URL/ID→MC百科。纯英文名优先Modrinth，中文名优先MC百科。"""
+    """show 默认模式：根据输入类型自动选择优先平台。
+
+    - Modrinth URL/slug → 直接查询 Modrinth
+    - MC百科 URL/ID → 直接查询 MC百科
+    - 纯英文名 → 优先 Modrinth，失败后回退 MC百科
+    - 中文名 → 优先 MC百科，失败后回退 Modrinth
+
+    Args:
+        name: 原始项目名称
+        ident: 解析后的项目标识符
+        skip_mr: 是否跳过 Modrinth
+        skip_mcmod: 是否跳过 MC百科
+        is_json: 是否以 JSON 格式输出
+    """
     saved_files = []
     # Modrinth 路径
     if ident["mr_slug"] is not None:
@@ -999,6 +1030,9 @@ def _cmd_search_keyword(args):
             _print_hit(hit)
 
 
+# ═══════════════════════════════════════════════════════════════
+# search 命令
+# ═══════════════════════════════════════════════════════════════
 def _cmd_search(args):
     """搜索命令分发。"""
     if args.author_name:
@@ -1006,10 +1040,13 @@ def _cmd_search(args):
     else:
         _cmd_search_keyword(args)
 
-# ============================================================
+# ═══════════════════════════════════════════════════════════════
 # show 命令
-# ============================================================
+# ═══════════════════════════════════════════════════════════════
 def _cmd_show(args):
+    """show 命令入口：解析项目标识符，根据输入类型（URL/ID/名称）自动选择平台。
+    支持 --full（双平台）、--deps（仅依赖）、--skip-mr/--skip-mcmod 等选项。
+    """
     name = (args.name or "").strip()
     if not name:
         _fail("错误: 项目名称不能为空", "EMPTY_NAME", args.json)
@@ -1061,11 +1098,14 @@ def _cmd_show(args):
                   is_json=args.json)
 
 
-# ============================================================
+# ═══════════════════════════════════════════════════════════════
 # wiki 命令
-# ============================================================
+# ═══════════════════════════════════════════════════════════════
 
 def _cmd_wiki(args):
+    """wiki 命令入口：搜索原版 Minecraft Wiki（EN/ZH）或读取指定 URL 页面。
+    支持 -r 读取第一个结果正文，-p 控制段落数。
+    """
     keyword = (args.keyword or "").strip()
 
     # 空关键词
@@ -1241,6 +1281,7 @@ def _build_parser():
 
 
 def main():
+    """CLI 主入口：解析命令行参数，设置全局配置，分发到对应命令处理函数。"""
     parser = _build_parser()
     args = parser.parse_args()
 
