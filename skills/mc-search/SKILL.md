@@ -1,6 +1,6 @@
 ---
 name: mc-search
-version: "5.2.0-dev"
+version: "5.4.0-dev"
 description: >
   Minecraft 聚合搜索：五平台并行搜索模组、整合包、光影、材质包、原版 Wiki 攻略，自动融合去重后返回结构化结果。
   当用户询问任何 Minecraft 相关内容（模组/整合包/光影/材质包/MC百科/Modrinth/原版 wiki/我的世界攻略/下载量/依赖关系）时使用此 skill。
@@ -16,7 +16,7 @@ allowed-tools: [Bash]
 
 **核心定位**：此 skill 为 AI Agent 设计，Agent 直接通过 Python API 调用，不依赖 CLI。
 
-五平台并行搜索 — MC百科(mcmod.cn)、Modrinth、bbsmc.net、minecraft.wiki(EN)、minecraft.wiki(ZH)。
+四平台并行搜索 — MC百科(mcmod.cn)、Modrinth、minecraft.wiki(EN)、minecraft.wiki(ZH)。bbsmc.net 作为 Modrinth 的中文补充源。
 结果自动融合去重，字段级权威源选取，跨语言桥接（中文关键词→英文补搜 Modrinth）对 Agent 透明。
 
 ## Agent 使用方式（Python API）

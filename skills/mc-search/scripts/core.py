@@ -56,6 +56,7 @@ _MAX_FETCH_WORKERS = 4
 _BBSMC_API = "https://api.bbsmc.net/v3"
 _MODRINTH_API = "https://api.modrinth.com/v2"
 _MAX_GALLERY = 0            # 默认不返回画廊（可配置）
+_EMPTY_MODRINTH_RESULT = {"results": [], "total": 0, "returned": 0}  # 平台搜索失败时的空信封
 _MAX_TAG_SECTION_LEN = 500
 _EXTERNAL_LINK_EXCLUDE_DOMAINS = ["curseforge", "modrinth", "github", "discord", "wikipedia", "mcbbs", "jenkins", "archive"]
 # MC百科外部链接分类规则：(匹配函数, key)。按顺序匹配第一个命中，key 已存在则跳过
@@ -211,9 +212,16 @@ def _build_mcmod_fallback_result(url: str, name: str, meta: dict | None = None,
 
 
 def _build_truncated_meta(description: str,
-                          max_chars: int) -> dict | None:
-    """构建描述截断元信息。无截断时返回 None。"""
-    truncated = {}
+                          max_chars: int,
+                          screenshots_meta: dict | None = None) -> dict | None:
+    """构建截断元信息。无截断时返回 None。
+
+    参数:
+        description: 描述文本
+        max_chars: 最大字符数
+        screenshots_meta: 截图截断元信息（可选，默认 None）
+    """
+    truncated = dict(screenshots_meta) if screenshots_meta else {}
     if description and len(description) > max_chars:
         truncated["description"] = {"returned": max_chars, "total": len(description)}
     return truncated or None
@@ -496,7 +504,7 @@ def set_platform_enabled(mcmod: bool = True, modrinth: bool = True, wiki: bool =
 # 使用 curl_cffi 模拟浏览器 TLS 指纹，绕过 www.mcmod.cn 的 CDN 盾
 _MCMOD_SESSION = None
 _MCMOD_BYPASSED = False
-_MCMOD_LOCK = threading.Lock()
+_MCMOD_LOCK = threading.RLock()
 
 
 def _mcmod_host(url: str) -> str:
@@ -1545,18 +1553,33 @@ def _build_mcmod_search_urls(keyword: str, content_type: str) -> list[str]:
         return [f"https://search.mcmod.cn/s?key={q}&filter={_MCMOD_FILTER_MOD}"]
 
 
-def _parse_mcmod_search_results(html: str, content_type: str, keyword: str) -> list[tuple[str, str]]:
-    """解析MC百科搜索结果页面，提取URL和名称对"""
+def _extract_mcmod_search_section(html: str, raise_on_empty: bool = True) -> str | None:
+    """从 MC 百科搜索结果页提取 search-result-list 区域（不含 pagination）。
+
+    Args:
+        html: 完整页面 HTML
+        raise_on_empty: 未找到 search-result-list 时是否抛出异常
+
+    Returns:
+        提取的 section 内容（已移除 <em> 标签），未找到时返回 None 或抛出异常
+    """
     idx = html.find("search-result-list")
     if idx == -1:
-        raise SearchError(f"MC百科 搜索结果页结构变化（无 search-result-list）：{keyword}")
+        if raise_on_empty:
+            raise SearchError("MC 百科 搜索结果页结构变化（无 search-result-list）")
+        return None
 
-    # 找到结果区域的结束位置（分页区域）
     end_idx = html.find('class="pagination"', idx)
     if end_idx == -1:
         end_idx = len(html)
     section = html[idx:end_idx]
-    clean = re.sub(r"<em[^>]*>|</em>", "", section)
+    return re.sub(r"<em[^>]*>|</em>", "", section)
+
+
+def _parse_mcmod_search_results(html: str, content_type: str, keyword: str) -> list[tuple[str, str]]:
+    """解析MC百科搜索结果页面，提取URL和名称对"""
+    section = _extract_mcmod_search_section(html)  # raise_on_empty=True → 结构变化时直接抛异常
+    clean = section
 
     # 物品用 /item/ URL，模组用 /class/ URL，整合包用 /modpack/ URL
     if content_type == "item":
@@ -1594,14 +1617,9 @@ def _extract_search_result_metadata(html: str) -> dict[str, dict]:
     """从搜索结果页提取每个结果的描述和分类 ID。
     返回 {url: {"description": "...", "category": N}}。
     """
-    idx = html.find("search-result-list")
-    if idx == -1:
+    section = _extract_mcmod_search_section(html, raise_on_empty=False)
+    if section is None:
         return {}
-
-    end_idx = html.find('class="pagination"', idx)
-    if end_idx == -1:
-        end_idx = len(html)
-    section = html[idx:end_idx]
 
     # 按 result-item 分割
     items = section.split('class="result-item"')
@@ -2289,35 +2307,46 @@ def fetch_mod_info(mod_id: str, no_limit: bool = False) -> dict | None:
     获取 mod 完整信息（Modrinth）。
     mod_id 可以是 slug 或 project_id。
     no_limit: True 时返回完整数据，False 时使用默认限制并返回 _truncated 元信息。
+    失败时返回 {"_error": "not_found"} 或 {"_error": "api_failed"}。
     """
-    # API调用
+    data, error = _fetch_modrinth_project(mod_id)
+    if error:
+        return {"_error": error}
+    return _build_modrinth_info_result(data, no_limit)
+
+
+def _fetch_modrinth_project(mod_id: str) -> tuple[dict | None, str | None]:
+    """获取 Modrinth 项目原始数据。
+
+    Returns:
+        (data, error) 元组。成功时 (dict, None)；失败时 (None, "not_found"|"api_failed"|"parse_failed")。
+    """
     raw = curl(f"{_MODRINTH_API}/project/{mod_id}")
     if raw is None:
-        return {"_error": "api_failed"}
+        return None, "api_failed"
     if not raw:
-        return {"_error": "not_found"}
+        return None, "not_found"
     try:
-        data = json.loads(raw)
+        return json.loads(raw), None
     except json.JSONDecodeError:
-        return {"_error": "api_failed"}
-    if not data:
-        return {"_error": "not_found"}
+        return None, "parse_failed"
 
+
+def _build_modrinth_info_result(data: dict, no_limit: bool = False) -> dict:
+    """从 Modrinth 项目数据构建完整信息结果（含作者/版本/截断元信息）。"""
     project_id = data.get("id", "")
 
-    # 3. 解析许可证和捐赠
+    # 解析许可证和捐赠
     license_id, license_name, license_url = _parse_modrinth_license(data.get("license"))
     donation_urls = _parse_modrinth_donations(data)
 
-    # 4. 处理body和gallery（无限制，返回完整数据）
+    # 处理 body 和 gallery
     raw_body = data.get("body") or ""
-    # 清洗：移除 "Our Patrons" 及之后的赞助者名单（Modrinth 特有脏数据）
     body = _clean_modrinth_body(raw_body)
-
     raw_gallery = [g.get("url") for g in data.get("gallery", []) if g.get("url")]
     gallery_total = len(raw_gallery)
 
-    # 5. 构建结果
+    # 构建基础结果
     ctx = {
         "license_id": license_id,
         "license_name": license_name,
@@ -2326,15 +2355,15 @@ def fetch_mod_info(mod_id: str, no_limit: bool = False) -> dict | None:
     }
     result = _build_modrinth_result(data, project_id, body, raw_gallery, ctx)
 
-    # 6. 添加截断元信息（仅当实际截断时）
+    # 截断元信息
     truncated = {}
     if gallery_total > _MAX_GALLERY and not no_limit:
         truncated["gallery"] = {"returned": _MAX_GALLERY, "total": gallery_total}
 
-    # 7. 获取作者
+    # 获取作者
     result["author"] = _fetch_modrinth_team_author(project_id)
 
-    # 8. 获取版本信息
+    # 获取版本信息
     version_info = _format_modrinth_versions(project_id, no_limit)
     if version_info:
         result.update({
@@ -2344,7 +2373,6 @@ def fetch_mod_info(mod_id: str, no_limit: bool = False) -> dict | None:
             "version_groups": version_info.get("version_groups"),
             "changelogs": version_info.get("changelogs"),
         })
-        # 添加截断元信息
         if not no_limit:
             version_total = version_info.get("_version_total", 0)
             changelog_total = version_info.get("_changelog_total", 0)
@@ -2353,7 +2381,6 @@ def fetch_mod_info(mod_id: str, no_limit: bool = False) -> dict | None:
             if changelog_total > _MAX_CHANGELOGS:
                 truncated["changelogs"] = {"returned": _MAX_CHANGELOGS, "total": changelog_total}
 
-    # 添加截断元信息并返回
     if truncated:
         result["_truncated"] = truncated
 
@@ -3314,37 +3341,39 @@ def search_all(keyword: str, max_per_source: int | None = None, timeout: int = 1
     fuse: True 时返回 {"results": [...融合列表...], "platform_stats": {platform: {total, returned}}}
          False 时返回 {platform: [results]}（向后兼容）
     """
-    # 验证关键词：拦截空关键词
     if not keyword or not keyword.strip():
         return {"results": [], "platform_stats": {}}
 
-    # 默认值 None 表示"使用平台默认结果数"（_DEFAULT_RESULTS_PER_PLATFORM=10）
     per_source = max_per_source if max_per_source is not None else _DEFAULT_RESULTS_PER_PLATFORM
-    results = {"mcmod.cn": [], "modrinth": [], "minecraft.wiki": [], "minecraft.wiki/zh": []}
-    stats = {"mcmod.cn": {"total": 0, "returned": 0},
-             "modrinth": {"total": 0, "returned": 0},
-             "minecraft.wiki": {"total": 0, "returned": 0},
-             "minecraft.wiki/zh": {"total": 0, "returned": 0}}
 
-    # 根据 content_type 决定启用的平台
+    # 1. 并行调度各平台搜索
+    results, stats = _dispatch_platform_search(keyword, per_source, content_type, timeout)
+
+    # 2. CJK 跨语言桥接（中文关键词 → MC百科 name_en → Modrinth 补搜）
+    if fuse and _is_cjk(keyword):
+        _apply_cjk_bridge(results, stats, keyword, per_source)
+
+    # 3. 结果融合或原样返回
+    if fuse:
+        fused = _fuse_results(results, content_type=content_type, query_keyword=keyword)
+        return {"results": fused, "platform_stats": stats}
+    return results
+
+
+def _dispatch_platform_search(keyword: str, per_source: int, content_type: str, timeout: int
+                              ) -> tuple[dict, dict]:
+    """并行调度各平台搜索，返回 (results, stats)。"""
+    results = {"mcmod.cn": [], "modrinth": [], "minecraft.wiki": [], "minecraft.wiki/zh": []}
+    stats = {p: {"total": 0, "returned": 0} for p in results}
+
     pe = _platform_enabled.copy()
     if content_type in _VISUAL_CONTENT_TYPES:
-        # shader/resourcepack 仅 Modrinth 支持
-        pe["mcmod.cn"] = False
-        pe["minecraft.wiki"] = False
-        pe["minecraft.wiki/zh"] = False
+        pe["mcmod.cn"] = pe["minecraft.wiki"] = pe["minecraft.wiki/zh"] = False
     elif content_type in ("mod", "modpack"):
-        # mod/modpack 无 wiki 数据，禁用避免噪音
-        pe["minecraft.wiki"] = False
-        pe["minecraft.wiki/zh"] = False
-    elif content_type == "vanilla":
-        # 原版内容仅 wiki
-        pe["mcmod.cn"] = False
-        pe["modrinth"] = False
-    elif content_type in ("entity", "biome", "dimension"):
-        # 实体/群系/维度仅 wiki（MC百科 + Modrinth 无对应分类）
-        pe["mcmod.cn"] = False
-        pe["modrinth"] = False
+        pe["minecraft.wiki"] = pe["minecraft.wiki/zh"] = False
+    else:
+        # vanilla / entity / biome / dimension → 仅 wiki
+        pe["mcmod.cn"] = pe["modrinth"] = False
 
     def _wrap_mcmod():
         try:
@@ -3362,7 +3391,7 @@ def search_all(keyword: str, max_per_source: int | None = None, timeout: int = 1
             return search_modrinth(keyword, per_source, project_type=mr_type)
         except (SearchError, OSError) as e:
             logger.warning(f"Modrinth搜索失败: {e}")
-            return {"results": [], "total": 0, "returned": 0}
+            return _EMPTY_MODRINTH_RESULT
 
     def _wrap_wiki():
         try:
@@ -3404,7 +3433,7 @@ def search_all(keyword: str, max_per_source: int | None = None, timeout: int = 1
                 raw = future.result(timeout=timeout)
             except (futures_module.TimeoutError, OSError, SearchError) as e:
                 logger.warning(f"平台 {key} 获取结果失败: {e}")
-                raw = [] if key != "modrinth" else {"results": [], "total": 0, "returned": 0}
+                raw = [] if key != "modrinth" else _EMPTY_MODRINTH_RESULT
 
             if key == "modrinth" and isinstance(raw, dict):
                 results[key] = raw.get("results", [])
@@ -3413,26 +3442,20 @@ def search_all(keyword: str, max_per_source: int | None = None, timeout: int = 1
                 results[key] = raw if isinstance(raw, list) else []
                 stats[key] = {"total": len(results[key]), "returned": len(results[key])}
 
-        # 取消未完成的 futures，避免后台线程泄漏
         for f in workers:
             f.cancel()
 
-    # 跨语言桥接：中文关键词用 MC百科 英文名补搜 Modrinth
-    # 注意：不能检查 results["modrinth"] 是否为空，因为 bbsmc CJK fallback 可能已填充了中文结果
-    if fuse and _is_cjk(keyword):
-        bridge_hits = _cross_language_bridge(results["mcmod.cn"], results["modrinth"], keyword, per_source)
-        if bridge_hits:
-            # 去重合并：避免和 bbsmc fallback 结果重复
-            existing_slugs = {h.get("source_id", "") for h in results["modrinth"]}
-            new_hits = [h for h in bridge_hits if h.get("source_id", "") not in existing_slugs]
-            results["modrinth"].extend(new_hits)
-            stats["modrinth"]["total"] = len(results["modrinth"])
-            stats["modrinth"]["returned"] = len(results["modrinth"])
+    return results, stats
 
-    if fuse:
-        fused = _fuse_results(results, content_type=content_type, query_keyword=keyword)
-        return {"results": fused, "platform_stats": stats}
-    return results
+
+def _apply_cjk_bridge(results: dict, stats: dict, keyword: str, per_source: int):
+    """中文关键词用 MC百科 name_en 补搜 Modrinth，去重后合并。"""
+    bridge_hits = _cross_language_bridge(results["mcmod.cn"], results["modrinth"], keyword, per_source)
+    if bridge_hits:
+        existing_slugs = {h.get("source_id", "") for h in results["modrinth"]}
+        new_hits = [h for h in bridge_hits if h.get("source_id", "") not in existing_slugs]
+        results["modrinth"].extend(new_hits)
+        stats["modrinth"]["total"] = stats["modrinth"]["returned"] = len(results["modrinth"])
 
 
 def _is_cjk(text: str) -> bool:

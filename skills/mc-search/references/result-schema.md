@@ -39,8 +39,10 @@
 | `screenshots` | 截图 URL 列表 |
 | `relationships.requires` | 前置 Mod 列表（MC百科 detail 才有；解析失败时含 `_error: "parse_failed"`，无关系时为 `{}`） |
 | `relationships.integrates` | 联动 Mod 列表（MC百科 detail 才有；解析失败时含 `_error: "parse_failed"`，无关系时为 `{}`） |
+
+> **注意**：当 HTML 存在但关系解析失败时，`relationships` 字段会包含 `{"_error": "parse_failed"}` 错误信号，而非简单的 `{}`。
 | `has_changelog` | 是否有更新日志布尔值（MC百科 detail 才有） |
-| `is_vanilla` | 是否为 MC百科原版内容分类（URL 含 `/class/1.html`） |
+| `is_vanilla` | 是否为 MC百科原版内容分类（URL 含 `/class/1.html`，仅 MC百科 mod 搜索结果包含） |
 | `external_links` | 外部平台链接字典（无时为 null）：`official` / `curseforge` / `modrinth` / `github` / `wiki` / `discord` / `jenkins` / `mcbbs` |
 | `author_team` | 作者团队列表（无时为 null），包含每个作者的姓名和分工，见下方说明 |
 | `community_stats` | 社区统计数据（无时为 null），包含评级、浏览量等，见下方说明 |
@@ -124,6 +126,7 @@
 | `integrations_count` | int | 关联整合包数量 |
 | `revision_count` | int | 修订次数 |
 | `last_updated` | str | 最后更新时间描述 |
+| `favorites` | int | 收藏数 |
 
 > 注：该字段可能为 null，如果MC百科页面上没有社区统计数据。
 
@@ -141,6 +144,8 @@
 | `source_id` | modpack ID（如 `123`） |
 | `type` | `modpack` |
 | `is_official` | 是否为 MC百科官方收录的整合包（URL 符合 `/modpack/\d+.html` 格式；仅 MC百科 整合包包含此字段） |
+
+> **注意**：`is_official` 字段仅在 MC百科 整合包搜索结果中出现，Modrinth 整合包无此字段。
 | `description` | 整合包描述 |
 | `author` | 作者名 |
 | `status` | 状态（如 `活跃`） |
@@ -160,7 +165,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 | 字段 | 说明 |
 |------|------|
 | `name` / `name_en` | 整合包名称 |
-| `name_zh` | 空字符串 |
+| `name_zh` | 空字符串（Modrinth 无中文名称） |
 | `url` | `https://modrinth.com/modpack/{slug}` |
 | `source` | `modrinth` |
 | `source_id` | slug |
@@ -190,13 +195,14 @@ Modrinth 整合包搜索结果结构与模组类似：
 
 | 平台 | 字段 | 默认限制 | 说明 |
 |------|------|----------|------|
-| MC百科 | `screenshots` | 0 张（默认关闭） | 详情页截图 |
+| MC百科 | `screenshots` | 默认关闭 | 详情页截图（默认不返回） |
 | Modrinth | `body` | 完整 | 项目描述（已赞助者名单清洗，不截断） |
 | Modrinth | `gallery` | 10 张 | 项目截图 |
 | Modrinth | `version_groups` | 5 组 | 版本分组 |
 | Modrinth | `changelogs` | 5 条 | 更新日志 |
+| 多平台 | `description` | 500 字符 | 描述文本截断（`_MAX_SEARCH_DESC_CHARS`） |
 
-> **注意**：`show --full` 命令仅 Modrinth 数据无截断，MC百科截图仍有默认限制。
+> **注意**：`show --full` 命令仅 Modrinth 数据无截断，MC百科截图默认关闭（不返回）。
 
 ---
 
@@ -234,6 +240,8 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `status` | 状态 |
 | `source_type` | `open_source` / `closed_source` |
 | `author` | 作者名（与搜索参数一致） |
+
+> **注意**：`search_mcmod_author` 的 `author` 字段与搜索参数完全一致，用于标识该模组属于哪个作者。
 | `categories` | 分类列表 |
 | `tags` | 标签列表 |
 | `supported_versions` | 支持的版本列表 |
@@ -261,7 +269,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `downloads` | 总下载量 |
 | `followers` | 关注数 |
 | `icon_url` | 图标 URL |
-| `snippet` | 简短描述（来自搜索摘要，非完整描述） |
+| `snippet` | 项目描述（来自详情 API，非搜索摘要） |
 
 ---
 
@@ -298,7 +306,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `published` | 发布时间 |
 | `followers` | 关注数 |
 | `icon_url` | 图标 URL |
-| `gallery` | 截图 URL 列表（**最多 10 张**） |
+| `gallery` | 截图 URL 列表（默认不返回，`show --full` 时返回全部） |
 | `latest_version` | 最新版本号 |
 | `game_versions` | 最新版本支持的游戏版本列表 |
 | `loaders` | 最新版本支持的加载器（fabric / forge / neoforge / quilt） |
@@ -312,12 +320,40 @@ Modrinth 整合包搜索结果结构与模组类似：
 
 当 `fuse=True` 或使用 `--json` 时，`search_all` 返回跨平台融合后的列表（按 content_type 调整平台优先级）。
 
+**支持的 content_type**：`mod` / `item` / `modpack` / `shader` / `resourcepack` / `vanilla` / `entity` / `biome` / `dimension`
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `source` | str | 来源平台，多平台时为 `\|` 分隔（如 `mcmod.cn\|modrinth`） |
 | `_sources` | list[str] | 融合来源平台列表（**仅融合模式下存在**） |
 | `is_primary` | bool | 是否为本体模组（C→B→A→兜底 四级联判定，至少一条结果标记） |
-| 其余字段 | | 来自优先级最高平台的结果 |
+| 其余字段 | 依来源平台 | 来自优先级最高平台的结果 |
+
+> **四级联判定规则**：
+> - **C 级**（精确匹配）：平台搜索结果中存在与查询关键词完全一致的项目
+> - **B 级**（前缀匹配）：项目名称以查询关键词开头
+> - **A 级**（全词匹配）：项目名称包含完整查询词（非子串）
+> - **兜底**：以上均不满足时，按相关性分数排序，首条结果标记为 `is_primary: true`
+
+### `fuse=False` 模式
+
+当 `fuse=False` 时，`search_all` 返回按平台分组的原始结果字典：
+
+```json
+{
+  "mcmod.cn": [...],
+  "modrinth": {"results": [...], "total": N, "returned": M},
+  "minecraft.wiki": [...],
+  "minecraft.wiki/zh": [...],
+  "platform_stats": {
+    "mcmod.cn": {"total": N, "returned": M},
+    "modrinth": {"total": N, "returned": M},
+    ...
+  }
+}
+```
+
+各平台返回格式与单平台搜索函数一致（Modrinth 为信封格式，其余为列表）。
 
 **融合示例**：
 ```json
@@ -349,7 +385,8 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `source` | `minecraft.wiki` |
 | `source_id` | pageid |
 | `type` | `"wiki"` |
-| `sections` | 章节标题列表（直接访问文章时从 h3 提取；MediaWiki API 降级路径返回空列表） |
+| `snippet` | 页面摘要（从 intro 区域提取，CJK 页面使用 fallback 策略） |
+| `sections` | 章节标题列表（直接访问文章时从 h2/h3 提取；MediaWiki API 降级路径返回空列表） |
 
 ---
 
@@ -362,3 +399,5 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `source` | `minecraft.wiki` |
 | `content` | 正文段落列表（兼容旧接口；过滤 infobox、JSON-LD、CSS 片段后的纯文本） |
 | `_sections` | 层级 section 列表（新版结构）：`{"heading", "parent", "content"}`，parent 为 null 表示顶级 h2，子节点为 h3/h4 |
+| `infobox` | 结构化数据（`include_infobox=True` 时返回） |
+| `main_image` | 页面主图 URL（`include_infobox=True` 时返回） |

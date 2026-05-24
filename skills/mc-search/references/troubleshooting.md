@@ -72,7 +72,7 @@ rm -rf ~/.cache/mc-search/
 
 1. **检查网络连接**：
    ```bash
-   curl -s -H "User-Agent: mc-search/5.2.0-dev" "https://api.modrinth.com/v2/project/sodium" | python -m json.tool
+   curl -s "https://api.modrinth.com/v2/project/sodium" | python -m json.tool
    ```
 
 2. **检查限流状态**：
