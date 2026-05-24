@@ -728,7 +728,9 @@ def curl(url: str, timeout: int = 10) -> str:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        if "mcmod.cn" in url and e.code in _MCMOD_RETRY_CODES:
+        if "modrinth.com" in url and e.code == 429:
+            logger.warning(f"Modrinth API 限流 (HTTP 429)，建议稍后重试。")
+        elif "mcmod.cn" in url and e.code in _MCMOD_RETRY_CODES:
             logger.error(f"MC百科 (mcmod.cn) 服务暂时不可用 (HTTP {e.code})，可能正在维护或遭受攻击。建议稍后重试或使用 --platform modrinth 仅搜索 Modrinth。")
         else:
             logger.warning(f"HTTP {e.code} for {url}: {e.reason}")
@@ -2307,7 +2309,7 @@ def fetch_mod_info(mod_id: str, no_limit: bool = False) -> dict | None:
     获取 mod 完整信息（Modrinth）。
     mod_id 可以是 slug 或 project_id。
     no_limit: True 时返回完整数据，False 时使用默认限制并返回 _truncated 元信息。
-    失败时返回 {"_error": "not_found"} 或 {"_error": "api_failed"}。
+    失败时返回 {"_error": "not_found"} / {"_error": "rate_limited"} / {"_error": "api_failed"}。
     """
     data, error = _fetch_modrinth_project(mod_id)
     if error:
@@ -2319,11 +2321,26 @@ def _fetch_modrinth_project(mod_id: str) -> tuple[dict | None, str | None]:
     """获取 Modrinth 项目原始数据。
 
     Returns:
-        (data, error) 元组。成功时 (dict, None)；失败时 (None, "not_found"|"api_failed"|"parse_failed")。
+        (data, error) 元组。成功时 (dict, None)；失败时 (None, "not_found"|"rate_limited"|"api_failed"|"parse_failed")。
     """
-    raw = curl(f"{_MODRINTH_API}/project/{mod_id}")
-    if raw is None:
+    url = f"{_MODRINTH_API}/project/{mod_id}"
+    try:
+        req = urllib.request.Request(url, headers=HTTP_HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            logger.warning(f"Modrinth API 限流 (HTTP 429)，建议稍后重试。")
+            return None, "rate_limited"
+        logger.warning(f"HTTP {e.code} for {url}: {e.reason}")
+        return None, "not_found" if e.code == 404 else "api_failed"
+    except urllib.error.URLError as e:
+        logger.warning(f"URL error for {url}: {e.reason}")
         return None, "api_failed"
+    except TimeoutError:
+        logger.warning(f"Modrinth API 请求超时。")
+        return None, "api_failed"
+
     if not raw:
         return None, "not_found"
     try:
@@ -3391,7 +3408,7 @@ def _dispatch_platform_search(keyword: str, per_source: int, content_type: str, 
             return search_modrinth(keyword, per_source, project_type=mr_type)
         except (SearchError, OSError) as e:
             logger.warning(f"Modrinth搜索失败: {e}")
-            return _EMPTY_MODRINTH_RESULT
+            return _EMPTY_MODRINTH_RESULT, True  # (data, is_error)
 
     def _wrap_wiki():
         try:
@@ -3433,11 +3450,21 @@ def _dispatch_platform_search(keyword: str, per_source: int, content_type: str, 
                 raw = future.result(timeout=timeout)
             except (futures_module.TimeoutError, OSError, SearchError) as e:
                 logger.warning(f"平台 {key} 获取结果失败: {e}")
-                raw = [] if key != "modrinth" else _EMPTY_MODRINTH_RESULT
+                if key == "modrinth":
+                    raw = (_EMPTY_MODRINTH_RESULT, True)
+                else:
+                    raw = []
 
-            if key == "modrinth" and isinstance(raw, dict):
-                results[key] = raw.get("results", [])
-                stats[key] = {"total": raw.get("total", 0), "returned": raw.get("returned", 0)}
+            if key == "modrinth":
+                is_error = False
+                if isinstance(raw, tuple) and len(raw) == 2:
+                    raw, is_error = raw
+                if isinstance(raw, dict) and not is_error:
+                    results[key] = raw.get("results", [])
+                    stats[key] = {"total": raw.get("total", 0), "returned": raw.get("returned", 0)}
+                else:
+                    results[key] = []
+                    stats[key] = {"total": 0, "returned": 0, "error": "search_failed"}
             else:
                 results[key] = raw if isinstance(raw, list) else []
                 stats[key] = {"total": len(results[key]), "returned": len(results[key])}
