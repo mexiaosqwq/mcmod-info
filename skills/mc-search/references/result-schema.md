@@ -197,7 +197,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 |------|------|----------|------|
 | MC百科 | `screenshots` | 默认关闭 | 详情页截图（默认不返回） |
 | Modrinth | `body` | 完整 | 项目描述（已赞助者名单清洗，不截断） |
-| Modrinth | `gallery` | 10 张 | 项目截图 |
+| Modrinth | `gallery` | 默认关闭 | 项目截图（show --full 时返回全部） |
 | Modrinth | `version_groups` | 5 组 | 版本分组 |
 | Modrinth | `changelogs` | 5 条 | 更新日志 |
 | 多平台 | `description` | 500 字符 | 描述文本截断（`_MAX_SEARCH_DESC_CHARS`） |

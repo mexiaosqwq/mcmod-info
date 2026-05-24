@@ -434,6 +434,12 @@ _cache_ttl = 3600  # 默认 1 小时
 _CACHE_LOCK = threading.Lock()  # 保护 _cache_enabled / _cache_ttl 的并发读写
 
 
+def _is_cache_enabled() -> bool:
+    """线程安全地读取 _cache_enabled 状态。"""
+    with _CACHE_LOCK:
+        return _cache_enabled
+
+
 def _cache_dir() -> Path:
     return Path(os.path.expanduser("~/.cache/mc-search"))
 
@@ -768,7 +774,7 @@ def curl(url: str, timeout: int = 10) -> str:
     MC百科详情页 HTML 会在缓存启用时自动缓存（TTL 由 set_cache 控制）。
     """
     # MC百科详情页 HTML 缓存（最贵请求，绕过 CDN 前先查缓存）
-    if _cache_enabled and "://www.mcmod.cn/class/" in url:
+    if _is_cache_enabled() and "://www.mcmod.cn/class/" in url:
         cached = _html_cache_get(url)
         if cached is not None:
             return cached
@@ -777,7 +783,7 @@ def curl(url: str, timeout: int = 10) -> str:
     if "://www.mcmod.cn/" in url or "://search.mcmod.cn/" in url:
         html = _curl_mcmod(url, timeout)
         # 成功获取的 MC百科详情页写入 HTML 缓存
-        if html and _cache_enabled and "://www.mcmod.cn/class/" in url:
+        if html and _is_cache_enabled() and "://www.mcmod.cn/class/" in url:
             _html_cache_set(url, html)
         return html
     # minecraft.wiki 需要 curl_cffi 绕过反爬

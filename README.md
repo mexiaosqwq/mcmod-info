@@ -59,7 +59,7 @@ mc-search-skill/
 ├── skills/mc-search/
 │   ├── SKILL.md               # Agent 调用定义
 │   ├── scripts/
-│   │   ├── core.py             # 搜索/解析/融合/缓存 (~3850 行)
+│   │   ├── core.py             # 搜索/解析/融合/缓存 (~4000 行)
 │   │   └── cli.py              # CLI 入口 (~1290 行)
 │   └── references/            # 错误码/平台对比/结果Schema
 ├── README.md

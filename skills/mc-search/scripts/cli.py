@@ -72,7 +72,7 @@ _PROJECT_TYPE_LABELS = {
     "shader": "光影包", "block": "方块", "item": "物品", "entity": "实体",
 }
 
-# 搜索平台开关配置：NamedTuple 替代 opaque tuple，语义清晰
+# 搜索平台开关配置：Mapping 类替代 opaque tuple，支持类型标注
 class _PlatformFlags(Mapping):
     """搜索平台开关配置。"""
 
@@ -1095,8 +1095,8 @@ def _cmd_show(args):
         return
 
     # ── 无效 flag 警告 ──
-    if (args.skip_dep or args.skip_mr) and not args.full:
-        print("警告: --skip-dep / --skip-mr 仅在 --full 模式下有效，当前已忽略",
+    if (args.skip_dep or args.skip_mr or args.skip_mcmod) and not args.full:
+        print("警告: --skip-dep / --skip-mr / --skip-mcmod 仅在 --full 模式下有效，当前已忽略",
               file=sys.stderr)
 
     # ── --full：双平台全量 ──
@@ -1104,7 +1104,7 @@ def _cmd_show(args):
         _show_full(name, ident,
                    skip_mr=args.skip_mr or args.no_mr,
                    skip_dep=args.skip_dep,
-                   skip_mcmod=args.no_mcmod,
+                   skip_mcmod=args.skip_mcmod or args.no_mcmod,
                    is_json=args.json)
         return
 
@@ -1280,6 +1280,8 @@ def _build_parser():
                     help="跳过依赖查询（仅 --full）")
     show_parser.add_argument("--skip-mr", dest="skip_mr", action="store_true",
                     help="跳过 Modrinth（仅 --full）")
+    show_parser.add_argument("--skip-mcmod", dest="skip_mcmod", action="store_true",
+                    help="跳过 MC百科（仅 --full）")
 
     # ── wiki ──
     wiki_parser = sub.add_parser("wiki", help="原版 Wiki 搜索与阅读")
