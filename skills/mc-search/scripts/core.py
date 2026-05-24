@@ -74,13 +74,42 @@ _MAX_GALLERY = 0            # 默认不返回画廊（可配置）
 _EMPTY_MODRINTH_RESULT = {"results": [], "total": 0, "returned": 0}  # 平台搜索失败时的空信封
 _MAX_TAG_SECTION_LEN = 500  # 标签区段最大长度
 _EXTERNAL_LINK_EXCLUDE_DOMAINS = ["curseforge", "modrinth", "github", "discord", "wikipedia", "mcbbs", "jenkins", "archive"]
+
+
+# ── 外部链接分类：具名函数替代 lambda，提升可读性与可测试性 ──────────────
+
+def _is_modrinth_link(url: str) -> bool:
+    """判断是否为 Modrinth 链接。"""
+    return "modrinth.com" in url
+
+
+def _is_wiki_link(url: str) -> bool:
+    """判断是否为 Wiki 链接（排除 GitHub）。"""
+    return "wiki" in url.lower() and "github.com" not in url
+
+
+def _is_discord_link(url: str) -> bool:
+    """判断是否为 Discord 邀请链接。"""
+    return "discord.gg" in url or "discord.com/invite" in url
+
+
+def _is_jenkins_link(url: str) -> bool:
+    """判断是否为 Jenkins/C I 链接。"""
+    return "jenkins" in url.lower() or "ci." in url
+
+
+def _is_mcbbs_link(url: str) -> bool:
+    """判断是否为 MCBBS 链接。"""
+    return "mcbbs" in url
+
+
 # MC百科外部链接分类规则：(匹配函数, key)。按顺序匹配第一个命中，key 已存在则跳过
 _SIMPLE_LINK_RULES = [
-    (lambda u: "modrinth.com" in u, "modrinth"),
-    (lambda u: "wiki" in u.lower() and "github.com" not in u, "wiki"),
-    (lambda u: "discord.gg" in u or "discord.com/invite" in u, "discord"),
-    (lambda u: "jenkins" in u.lower() or "ci." in u, "jenkins"),
-    (lambda u: "mcbbs" in u, "mcbbs"),
+    (_is_modrinth_link, "modrinth"),
+    (_is_wiki_link, "wiki"),
+    (_is_discord_link, "discord"),
+    (_is_jenkins_link, "jenkins"),
+    (_is_mcbbs_link, "mcbbs"),
 ]
 _MAX_TAG_TEXT_LEN = 20      # 单个标签最大字符数
 _MAX_SEARCH_SEGMENT = 2000  # 搜索区段最大长度
@@ -324,6 +353,8 @@ _MCMOD_COMMON_SKIP_PREFIXES = (
     "MC百科的目标是", "MC百科(mcmod.cn)的目标",
     "提供Minecraft(我的世界)MOD(模组)物品资料介绍",
 )
+# 过滤描述中的元数据行：如 "Mod (123)"、"Mod 讨论 (123)" 等
+_MOD_META_PAT = re.compile(r"^(?:\(\d+\)\s*)?Mod(?:讨论|教程)\s*\(\d+\)")
 
 # MC百科整合包多 filter 策略（按优先级）
 _MCMOD_MODPACK_FILTERS = [
@@ -358,8 +389,6 @@ _EN_CONNECTORS_RE = re.compile(
 _ZH_CONNECTORS_RE = re.compile(
     r"(和|与|或|但|是|为|有|在|被|由|可|会|能|将|已|使)",
 )
-# 匹配论坛元数据，如 (7)Mod讨论 (2) 或 Mod讨论 (19)
-_MOD_META_PAT = re.compile(r"^(?:\(\d+\)\s*)?Mod(?:讨论|教程)\s*\(\d+\)")
 
 
 def _clean_html_text(html_fragment: str, preserve_nl: bool = False) -> str:
@@ -402,6 +431,7 @@ def _is_valid_paragraph(text: str, lang: str = "en") -> bool:
 
 _cache_enabled = False
 _cache_ttl = 3600  # 默认 1 小时
+_CACHE_LOCK = threading.Lock()  # 保护 _cache_enabled / _cache_ttl 的并发读写
 
 
 def _cache_dir() -> Path:
@@ -416,8 +446,9 @@ def _cache_key(*parts: str) -> str:
 
 def _cache_get(cache_type: str, key: str) -> dict | None:
     """读取缓存，成功返回 dict，失败/过期返回 None。"""
-    if not _cache_enabled:
-        return None
+    with _CACHE_LOCK:
+        if not _cache_enabled:
+            return None
     p = _cache_dir() / cache_type / f"{key}.json"
     if not p.exists():
         return None
@@ -434,8 +465,9 @@ def _cache_get(cache_type: str, key: str) -> dict | None:
 
 def _cache_set(cache_type: str, key: str, data: dict):
     """写入缓存。"""
-    if not _cache_enabled:
-        return
+    with _CACHE_LOCK:
+        if not _cache_enabled:
+            return
     try:
         d = _cache_dir() / cache_type
         d.mkdir(parents=True, exist_ok=True)
@@ -453,8 +485,9 @@ def _html_cache_key(url: str) -> str:
 
 def _html_cache_get(url: str) -> str | None:
     """读取 HTML 缓存，命中返回 HTML 字符串，未命中返回 None。"""
-    if not _cache_enabled:
-        return None
+    with _CACHE_LOCK:
+        if not _cache_enabled:
+            return None
     p = _cache_dir() / "html" / f"{_html_cache_key(url)}.html"
     if not p.exists():
         return None
@@ -470,8 +503,9 @@ def _html_cache_get(url: str) -> str | None:
 
 def _html_cache_set(url: str, html: str):
     """写入 HTML 缓存。"""
-    if not _cache_enabled:
-        return
+    with _CACHE_LOCK:
+        if not _cache_enabled:
+            return
     try:
         d = _cache_dir() / "html"
         d.mkdir(parents=True, exist_ok=True)
@@ -509,13 +543,15 @@ def set_cache(enabled: bool, ttl: int = 3600):
         ttl: 缓存存活时间（秒），默认 3600（1 小时）
     """
     global _cache_enabled, _cache_ttl
-    _cache_enabled = enabled
-    _cache_ttl = ttl
+    with _CACHE_LOCK:
+        _cache_enabled = enabled
+        _cache_ttl = ttl
 
 
 # 平台开关
 
 _platform_enabled = {"mcmod.cn": True, "modrinth": True, "minecraft.wiki": True, "minecraft.wiki/zh": True}
+_PLATFORM_LOCK = threading.Lock()  # 保护 _platform_enabled 的并发读写
 
 
 def set_platform_enabled(mcmod: bool = True, modrinth: bool = True, wiki: bool = True, wiki_zh: bool = True):
@@ -528,12 +564,13 @@ def set_platform_enabled(mcmod: bool = True, modrinth: bool = True, wiki: bool =
         wiki_zh: minecraft.wiki ZH 开关
     """
     global _platform_enabled
-    _platform_enabled = {
-        "mcmod.cn": mcmod,
-        "modrinth": modrinth,
-        "minecraft.wiki": wiki,
-        "minecraft.wiki/zh": wiki_zh,
-    }
+    with _PLATFORM_LOCK:
+        _platform_enabled = {
+            "mcmod.cn": mcmod,
+            "modrinth": modrinth,
+            "minecraft.wiki": wiki,
+            "minecraft.wiki/zh": wiki_zh,
+        }
 
 
 # ── MC百科 CDN 绕过状态 ──────────────────────────────

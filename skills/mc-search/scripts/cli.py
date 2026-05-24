@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 
 from . import core
 
@@ -71,14 +72,30 @@ _PROJECT_TYPE_LABELS = {
     "shader": "光影包", "block": "方块", "item": "物品", "entity": "实体",
 }
 
-# 搜索平台开关配置：(mcmod, modrinth, wiki, wiki_zh)
-_PLATFORM_FLAGS = {
-    "all":      (True,  True,  True,  True),
-    "mcmod":    (True,  False, False, False),
-    "modrinth": (False, True,  False, False),
-    "wiki":     (False, False, True,  False),
-    "wiki-zh":  (False, False, False, True),
-}
+# 搜索平台开关配置：NamedTuple 替代 opaque tuple，语义清晰
+class _PlatformFlags(Mapping):
+    """搜索平台开关配置。"""
+
+    def __init__(self):
+        self._data = {
+            "all":      (True,  True,  True,  True),
+            "mcmod":    (True,  False, False, False),
+            "modrinth": (False, True,  False, False),
+            "wiki":     (False, False, True,  False),
+            "wiki-zh":  (False, False, False, True),
+        }
+
+    def __getitem__(self, key: str) -> tuple[bool, bool, bool, bool]:
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+
+_PLATFORM_FLAGS: Mapping[str, tuple[bool, bool, bool, bool]] = _PlatformFlags()
 
 
 def _find_sentence_boundary(text: str) -> int:
@@ -423,7 +440,7 @@ def _print_hit(hit: dict):
     if url: print(f"     → {url}")
 
 
-def _print_deps(deps: dict, mod_name: str = ""):
+def _print_deps(deps: dict, mod_name: str = "") -> None:
     """文本模式打印模组依赖列表。展示依赖名、运行环境（客户端/服务端）、URL。"""
     dep_dict = deps.get("deps", {})
     if not dep_dict:
@@ -661,7 +678,7 @@ def _is_captcha(info: dict) -> bool:
     return name == _CAPTCHA_NAME
 
 
-def _is_valid(info) -> bool:
+def _is_valid(info: dict | None) -> bool:
     """判断 fetch_mod_info / get_mod_dependencies 返回的是有效数据（非 error dict）。"""
     return info is not None and isinstance(info, dict) and "_error" not in info
 
@@ -705,7 +722,7 @@ def _fetch_mcmod_info(class_id: str, mcmod_name: str) -> tuple[dict, list, str]:
     return parsed, hits, None
 
 
-def _print_integrations(integrations: list):
+def _print_integrations(integrations: list) -> None:
     """打印 MC百科联动模组列表。包含名称、简介、URL。"""
     print(f"  联动模组（{len(integrations)} 个）：")
     for int_mod in integrations:
