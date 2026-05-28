@@ -52,6 +52,9 @@ clean-code-review.*
 # Claude Code local config (hooks, settings)
 .claude/
 
+# CodeGraph index (local build artifact)
+.codegraph/
+
 # Agent engineering files (local-only)
 docs/agents/
 docs/adr/
