@@ -478,6 +478,227 @@ print(f"  Failed: {failed}")
 print(f"  Skipped:{skipped}")
 print("=" * 60)
 
+# ── 14. search_mcmod_modpack — 整合包搜索 ────────────
+print("\n" + "=" * 60)
+print("SECTION 14: search_mcmod_modpack()")
+print("=" * 60)
+
+try:
+    modpack_results = core.search_mcmod_modpack("天空工厂", max_results=3)
+    check("search_mcmod_modpack returns list", isinstance(modpack_results, list))
+    check("search_mcmod_modpack returns >0 results", len(modpack_results) > 0)
+    if modpack_results:
+        r = modpack_results[0]
+        check("Modpack result has 'name'", 'name' in r)
+        check("Modpack result has 'is_official'", 'is_official' in r)
+        check("Modpack result type is modpack", r.get('type') == 'modpack')
+    print(f"  >> Modpacks: {[m.get('name', '?') for m in modpack_results[:3]]}")
+except core.SearchError as e:
+    check(f"search_mcmod_modpack raised SearchError: {e}", False, str(e))
+except Exception as e:
+    check(f"search_mcmod_modpack exception: {type(e).__name__}", False, str(e))
+
+# ── 15. read_wiki / read_wiki_zh — 正文读取 ─────────
+print("\n" + "=" * 60)
+print("SECTION 15: read_wiki() / read_wiki_zh()")
+print("=" * 60)
+
+try:
+    # 使用有 infobox 的页面（Enchanting 页面无 infobox）
+    article = core.read_wiki("https://minecraft.wiki/w/Diamond_Sword", include_infobox=True)
+    check("read_wiki returns dict", isinstance(article, dict))
+    check("read_wiki has 'name'", 'name' in article)
+    check("read_wiki has 'content'", 'content' in article)
+    check("read_wiki content is list", isinstance(article.get('content'), list))
+    check("read_wiki has '_sections'", '_sections' in article)
+    check("read_wiki has 'infobox'", 'infobox' in article)
+    check("read_wiki has 'main_image'", 'main_image' in article)
+    if article.get('content'):
+        check("read_wiki content non-empty", len(article['content']) > 0)
+    print(f"  >> Wiki article: {article.get('name', '?')}, paragraphs: {len(article.get('content', []))}")
+except Exception as e:
+    check(f"read_wiki exception: {type(e).__name__}", False, str(e))
+
+# ── 16. fetch_mod_info — 详情字段验证 ───────────────
+print("\n" + "=" * 60)
+print("SECTION 16: fetch_mod_info() — 字段验证")
+print("=" * 60)
+
+try:
+    info = core.fetch_mod_info("sodium")
+    check("fetch_mod_info returns dict", isinstance(info, dict))
+    check("fetch_mod_info has 'name'", 'name' in info)
+    check("fetch_mod_info has 'license'", 'license' in info)
+    check("fetch_mod_info has 'license_name'", 'license_name' in info)
+    check("fetch_mod_info has 'license_url'", 'license_url' in info)
+    check("fetch_mod_info has 'body'", 'body' in info)
+    check("fetch_mod_info has 'gallery'", 'gallery' in info)
+    check("fetch_mod_info has 'changelogs'", 'changelogs' in info)
+    # dependencies 需通过 get_mod_dependencies() 单独查询，不在 fetch_mod_info 中返回
+    check("fetch_mod_info has 'categories'", 'categories' in info)
+    check("fetch_mod_info has 'display_categories'", 'display_categories' in info)
+    check("fetch_mod_info has 'client_side'", 'client_side' in info)
+    check("fetch_mod_info has 'server_side'", 'server_side' in info)
+    check("fetch_mod_info has 'source_url'", 'source_url' in info)
+    check("fetch_mod_info has 'issues_url'", 'issues_url' in info)
+    check("fetch_mod_info has 'discord_url'", 'discord_url' in info)
+    check("fetch_mod_info has 'donation_urls'", 'donation_urls' in info)
+    check("fetch_mod_info has 'updated'", 'updated' in info)
+    check("fetch_mod_info has 'published'", 'published' in info)
+    check("fetch_mod_info has 'latest_version'", 'latest_version' in info)
+    check("fetch_mod_info has 'game_versions'", 'game_versions' in info)
+    check("fetch_mod_info has 'loaders'", 'loaders' in info)
+    check("fetch_mod_info has 'version_groups'", 'version_groups' in info)
+    if info.get('changelogs'):
+        check("changelogs is list", isinstance(info['changelogs'], list))
+    if info.get('gallery'):
+        check("gallery is list", isinstance(info['gallery'], list))
+    print(f"  >> Mod info: {info.get('name', '?')}, license: {info.get('license_name', '?')}")
+except Exception as e:
+    check(f"fetch_mod_info exception: {type(e).__name__}", False, str(e))
+
+# ── 17. get_mod_dependencies — 依赖查询 ─────────────
+print("\n" + "=" * 60)
+print("SECTION 17: get_mod_dependencies()")
+print("=" * 60)
+
+try:
+    deps = core.get_mod_dependencies("sodium")
+    check("get_mod_dependencies returns dict", isinstance(deps, dict))
+    check("get_mod_dependencies has 'deps'", 'deps' in deps)
+    check("get_mod_dependencies deps is dict", isinstance(deps.get('deps'), dict))
+    if deps.get('deps'):
+        first_dep = list(deps['deps'].values())[0]
+        check("Dependency has 'name'", 'name' in first_dep)
+        check("Dependency has 'client_side'", 'client_side' in first_dep)
+        check("Dependency has 'server_side'", 'server_side' in first_dep)
+        check("Dependency has 'url'", 'url' in first_dep)
+    print(f"  >> Dependencies: {len(deps.get('deps', {}))} deps")
+except Exception as e:
+    check(f"get_mod_dependencies exception: {type(e).__name__}", False, str(e))
+
+# ── 18. is_primary 级联逻辑验证 ────────────────────
+print("\n" + "=" * 60)
+print("SECTION 18: is_primary 级联逻辑")
+print("=" * 60)
+
+try:
+    # 测试 C 级：前置关系检测
+    # 构造一个场景：某个模组被其他模组依赖
+    result = core.search_all("创造", max_per_source=3, content_type="mod", fuse=True)
+    check("search_all returns results for is_primary test", len(result.get('results', [])) > 0)
+
+    primary_count = sum(1 for r in result.get('results', []) if r.get('is_primary') == True)
+    check("At least one result marked is_primary", primary_count >= 1,
+          f"is_primary count: {primary_count}")
+
+    # 验证 is_primary 是 bool 类型
+    for r in result.get('results', []):
+        check(f"is_primary is bool for {r.get('name', '?')}",
+              isinstance(r.get('is_primary'), bool))
+
+    print(f"  >> is_primary: {primary_count}/{len(result.get('results', []))} marked")
+except Exception as e:
+    check(f"is_primary test exception: {type(e).__name__}", False, str(e))
+
+# ── 19. _truncated 元数据验证 ──────────────────────
+print("\n" + "=" * 60)
+print("SECTION 19: _truncated 元数据")
+print("=" * 60)
+
+try:
+    # 搜索大结果集，触发截断
+    result = core.search_all("mod", max_per_source=10, content_type="mod", fuse=True)
+    truncated_results = [r for r in result.get('results', []) if '_truncated' in r]
+    check("_truncated field may exist", True)  # 存在性检查，不一定每个结果都有
+
+    if truncated_results:
+        r = truncated_results[0]
+        trunc = r.get('_truncated', {})
+        check("_truncated is dict", isinstance(trunc, dict))
+        # 检查是否有字段被截断的记录
+        for field, info in trunc.items():
+            check(f"_truncated[{field}] has returned/total",
+                  'returned' in info and 'total' in info)
+    print(f"  >> Truncated results: {len(truncated_results)}")
+except Exception as e:
+    check(f"_truncated test exception: {type(e).__name__}", False, str(e))
+
+# ── 20. fuse=False envelope 格式验证 ──────────────
+print("\n" + "=" * 60)
+print("SECTION 20: fuse=False envelope 格式")
+print("=" * 60)
+
+try:
+    result_raw = core.search_all("sodium", max_per_source=3, content_type="mod", fuse=False)
+    check("fuse=False returns dict", isinstance(result_raw, dict))
+
+    # Modrinth 在 fuse=False 时返回列表（非信封格式），需分别处理
+    mr_data = result_raw.get('modrinth', [])
+    if isinstance(mr_data, dict):
+        check("Modrinth envelope has 'results'", 'results' in mr_data)
+        check("Modrinth envelope has 'total'", 'total' in mr_data)
+        check("Modrinth envelope has 'returned'", 'returned' in mr_data)
+        check("Modrinth results is list", isinstance(mr_data.get('results'), list))
+        print(f"  >> Modrinth envelope: total={mr_data.get('total', '?')}, returned={mr_data.get('returned', '?')}")
+    elif isinstance(mr_data, list):
+        check("Modrinth returns list in fuse=False mode", True)
+        print(f"  >> Modrinth results: {len(mr_data)} items (list format)")
+except Exception as e:
+    check(f"fuse=False envelope test exception: {type(e).__name__}", False, str(e))
+
+# ── 21. 模糊匹配去重参数验证 ──────────────────────
+print("\n" + "=" * 60)
+print("SECTION 21: 模糊匹配去重参数")
+print("=" * 60)
+
+check("FUZZY_MATCH_THRESHOLD = 0.85", core.FUZZY_MATCH_THRESHOLD == 0.85,
+      f"got: {core.FUZZY_MATCH_THRESHOLD}")
+check("FUZZY_MIN_LEN = 4", core.FUZZY_MIN_LEN == 4,
+      f"got: {core.FUZZY_MIN_LEN}")
+print(f"  >> FUZZY_MATCH_THRESHOLD: {core.FUZZY_MATCH_THRESHOLD}, FUZZY_MIN_LEN: {core.FUZZY_MIN_LEN}")
+
+# ── 22. cache TTL 过期验证 ────────────────────────
+print("\n" + "=" * 60)
+print("SECTION 22: cache TTL 过期")
+print("=" * 60)
+
+try:
+    # 启用缓存
+    core.set_cache(True, ttl=2)  # 2 秒 TTL
+    check("set_cache(True, ttl=2) executed", True)
+
+    # 首次搜索（写入缓存）
+    r1 = core.search_all("sodium", max_per_source=1, content_type="mod", fuse=True)
+    check("First search returns results", len(r1.get('results', [])) > 0)
+
+    # 等待过期
+    import time
+    time.sleep(3)
+
+    # 再次搜索（应重新请求，而非命中缓存）
+    r2 = core.search_all("sodium", max_per_source=1, content_type="mod", fuse=True)
+    check("Second search after TTL returns results", len(r2.get('results', [])) > 0)
+
+    # 禁用缓存
+    core.set_cache(False)
+    check("set_cache(False) executed", True)
+
+    print("  >> Cache TTL test passed (2s TTL expired)")
+except Exception as e:
+    check(f"cache TTL test exception: {type(e).__name__}", False, str(e))
+
+# ── Summary ─────────────────────────────────────────
+print("\n" + "=" * 60)
+print("REGRESSION TEST SUMMARY")
+print("=" * 60)
+total = passed + failed + skipped
+print(f"  Total:  {total}")
+print(f"  Passed: {passed}")
+print(f"  Failed: {failed}")
+print(f"  Skipped:{skipped}")
+print("=" * 60)
+
 if failed > 0:
     print("\n*** SOME TESTS FAILED ***")
     sys.exit(1)

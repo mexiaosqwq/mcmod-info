@@ -60,3 +60,6 @@ docs/agents/
 docs/adr/
 CONTEXT.md
 CONTEXT-MAP.md
+
+# Test failure reports (local debugging artifacts)
+docs/test-failures-*.md

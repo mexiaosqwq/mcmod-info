@@ -75,6 +75,10 @@ _EMPTY_MODRINTH_RESULT = {"results": [], "total": 0, "returned": 0}  # 平台搜
 _MAX_TAG_SECTION_LEN = 500  # 标签区段最大长度
 _EXTERNAL_LINK_EXCLUDE_DOMAINS = ["curseforge", "modrinth", "github", "discord", "wikipedia", "mcbbs", "jenkins", "archive"]
 
+# 模糊匹配参数（融合管线去重步骤使用）
+FUZZY_MATCH_THRESHOLD = 0.85  # 模糊匹配相似度阈值，≥0.85 视为同一实体
+FUZZY_MIN_LEN = 4             # 模糊匹配最小长度，短于 4 字符的 key 不做模糊匹配
+
 
 # ── 外部链接分类：具名函数替代 lambda，提升可读性与可测试性 ──────────────
 
@@ -2682,9 +2686,9 @@ def _add_variant_param(url: str) -> str:
 
 
 def _build_wiki_result(name, url, source, source_id, snippet, sections,
-                       title_field=""):
+                       title_field="", main_image=None):
     """构造 wiki 搜索结果 dict。title_field 决定哪个 name 字段填入标题。"""
-    return {
+    result = {
         "name": name,
         "name_en": name if title_field == "name_en" else "",
         "name_zh": name if title_field == "name_zh" else "",
@@ -2695,6 +2699,9 @@ def _build_wiki_result(name, url, source, source_id, snippet, sections,
         "sections": sections,
         "snippet": snippet,
     }
+    if main_image:
+        result["main_image"] = main_image
+    return result
 
 
 def _wiki_direct_access(
@@ -2765,16 +2772,19 @@ def _wiki_api_search(
     add_variant: bool,
     max_results: int,
 ) -> list[dict]:
-    """MediaWiki API 搜索。返回结果列表。"""
+    """MediaWiki API 搜索。返回结果列表（含 main_image）。"""
     results = []
     q = urllib.parse.quote(keyword)
-    api_url = f"{base_url}/api.php?action=query&list=search&srsearch={q}&format=json&srlimit={max_results}"
+    # 使用 prop=pageimages 获取每页缩略图（pithumbsize=200）
+    api_url = (f"{base_url}/api.php?action=query&list=search&srsearch={q}"
+               f"&prop=pageimages&pithumbsize=200&format=json&srlimit={max_results}")
     raw = curl(api_url)
     if not raw:
         return results
     try:
         data = json.loads(raw)
         hits = data.get("query", {}).get("search", [])
+        pages = data.get("query", {}).get("pages", {})
         for hit in hits[:max_results]:
             title = hit.get("title", "")
             page_id = hit.get("pageid", 0)
@@ -2788,6 +2798,10 @@ def _wiki_api_search(
             article_url = f"{base_url}/w/{urllib.parse.quote(title.replace(' ', '_'))}"
             if add_variant:
                 article_url = _add_variant_param(article_url)
+            # 从 pageimages 中提取缩略图
+            page = pages.get(str(page_id), {})
+            image_info = page.get("thumbnail")
+            main_image = image_info.get("source") if image_info else None
             results.append(_build_wiki_result(
                 name=title,
                 url=article_url,
@@ -2796,6 +2810,7 @@ def _wiki_api_search(
                 snippet=clean_snippet,
                 sections=[],
                 title_field=title_field,
+                main_image=main_image,
             ))
     except (json.JSONDecodeError, KeyError, AttributeError) as e:
         logger.warning(f"Wiki search parse failed for {keyword}: {e}")
@@ -3807,12 +3822,22 @@ def _score_and_filter(results: dict, content_type: str, query_keyword: str) -> l
 
 
 def _entry_name_keys(entry: dict) -> set[str]:
-    """返回所有可用名称的标准化 key 集合（多候选，跨语言匹配）。"""
+    """返回所有可用名称的标准化 key 集合（多候选，跨语言匹配）。
+
+    对每个名称生成 hyphen 和 space 两种变体，解决 "EnderIO" vs "Ender-IO"
+    等连字符差异导致的跨平台去重失败问题。
+    """
     keys = set()
     for field in ('name_zh', 'name_en', 'name', '_name_zh_cn'):
         v = entry.get(field)
         if v and isinstance(v, str) and v.strip():
-            keys.add(v.strip().lower())
+            norm = v.strip().lower()
+            keys.add(norm)
+            # Hyphen/space 归一化：同时生成连字符和空格两种变体
+            if '-' in norm:
+                keys.add(norm.replace('-', ' '))
+            elif ' ' in norm:
+                keys.add(norm.replace(' ', '-'))
     return keys
 
 
@@ -3871,9 +3896,16 @@ def _merge_entry_fields(entries: list[dict]) -> dict:
 
 
 def _deduplicate_by_name(scored: list[dict], name_platform_count: dict) -> dict[str, dict]:
-    """步骤3: 多候选 key 去重。两结果任一 key 命中即视为同一内容。按字段级权威源合并。"""
+    """步骤3: 多候选 key 去重。两结果任一 key 命中即视为同一内容。按字段级权威源合并。
+
+    匹配策略（按优先级）：
+    1. 精确匹配：entry 的任一 key 与已有 canonical 组的 key 完全相等
+    2. 模糊匹配：精确匹配失败后，对 entry 的每个 key 与组内所有 key 做 SequenceMatcher，
+       相似度 ≥ FUZZY_MATCH_THRESHOLD 且 key 长度 ≥ FUZZY_MIN_LEN 视为同一实体
+    """
     key_to_canonical = {}         # individual key → canonical key
     entries_by_canonical = {}     # canonical_key → [entry, ...]
+    from difflib import SequenceMatcher
 
     for entry in scored:
         entry_keys = _entry_name_keys(entry)
@@ -3887,10 +3919,40 @@ def _deduplicate_by_name(scored: list[dict], name_platform_count: dict) -> dict[
                 break
 
         if canonical_key is None:
-            canonical_key = min(entry_keys)
-            entries_by_canonical[canonical_key] = [entry]
-            for k in entry_keys:
-                key_to_canonical[k] = canonical_key
+            # 精确匹配失败，尝试模糊匹配到已有组
+            matched_canonical = None
+            for ck, c_entries in entries_by_canonical.items():
+                # 获取该组的所有 key
+                group_keys = set()
+                for ce in c_entries:
+                    group_keys.update(_entry_name_keys(ce))
+                for ek in entry_keys:
+                    if len(ek) < FUZZY_MIN_LEN:
+                        continue
+                    for gk in group_keys:
+                        if len(gk) < FUZZY_MIN_LEN:
+                            continue
+                        ratio = SequenceMatcher(None, ek, gk).ratio()
+                        if ratio >= FUZZY_MATCH_THRESHOLD:
+                            matched_canonical = ck
+                            break
+                    if matched_canonical:
+                        break
+                if matched_canonical:
+                    break
+
+            if matched_canonical is not None:
+                canonical_key = matched_canonical
+                entries_by_canonical[canonical_key].append(entry)
+                for k in entry_keys:
+                    if k not in key_to_canonical:
+                        key_to_canonical[k] = canonical_key
+            else:
+                # 精确和模糊都失败，创建新组
+                canonical_key = min(entry_keys)
+                entries_by_canonical[canonical_key] = [entry]
+                for k in entry_keys:
+                    key_to_canonical[k] = canonical_key
             continue
 
         entries_by_canonical[canonical_key].append(entry)
@@ -3901,16 +3963,20 @@ def _deduplicate_by_name(scored: list[dict], name_platform_count: dict) -> dict[
     # 多平台命中加权 + 字段级权威源合并
     by_name = {}
     for canonical_key, entries in entries_by_canonical.items():
-        # 多平台加权（对组内所有条目计分）
-        all_keys = {k for k, c in key_to_canonical.items() if c == canonical_key}
+        # 多平台统计：直接从组内 entries 收集平台（比 name_platform_count 更可靠，
+        # 因为模糊匹配后 key 的 frozenset 分组已不适用）
         all_platforms = set()
-        for k in all_keys:
-            all_platforms.update(name_platform_count.get(frozenset([k]), set()))
+        for e in entries:
+            platform = e.get("_platform") or e.get("source", "")
+            if platform:
+                all_platforms.add(platform)
         platform_count = len(all_platforms)
 
         merged = _merge_entry_fields(entries)
         if platform_count > 1:
             merged["_score"] += (platform_count - 1) * MatchScore.MULTI_PLATFORM_BONUS
+        # 直接设置 _sources，避免 _build_fused_output 的精确集合交集在模糊匹配场景下失效
+        merged["_sources"] = sorted(all_platforms)
         by_name[canonical_key] = merged
 
     return by_name
@@ -3930,10 +3996,12 @@ def _build_fused_output(sorted_entries: list[dict], scored: list[dict]) -> list[
                   if not k.startswith("_") or k in ("_score", "_sources", "_truncated")}
 
         # 收集所有 key 重叠结果的平台（多候选 key 交集匹配）
-        entry_keys = _entry_name_keys(entry)
-        platforms = [e["_platform"] for e in scored
-                     if _entry_name_keys(e) & entry_keys]
-        merged["_sources"] = list(dict.fromkeys(platforms))
+        # 如果 entry 已有 _sources（来自 _deduplicate_by_name 的模糊匹配结果），则保留
+        if "_sources" not in merged:
+            entry_keys = _entry_name_keys(entry)
+            platforms = [e["_platform"] for e in scored
+                         if _entry_name_keys(e) & entry_keys]
+            merged["_sources"] = list(dict.fromkeys(platforms))
 
         if len(merged["_sources"]) > 1:
             # 多平台同名结果：组合 source 字段（如 "mcmod.cn|modrinth"）
@@ -3944,13 +4012,23 @@ def _build_fused_output(sorted_entries: list[dict], scored: list[dict]) -> list[
 
 
 def _mark_primary(fused: list[dict], query_keyword: str) -> list[dict]:
-    """标记融合结果中的本体模组（C→B→A 级联判断）。"""
+    """标记融合结果中的本体模组（C→B→A 级联判断）。
+
+    为所有结果设置 is_primary 字段：True 表示本体，False 表示非本体。
+    """
     if not fused:
         return fused
 
     q = (query_keyword or "").strip().lower()
     if not q:
+        # 无查询词时，所有结果标记为非本体
+        for hit in fused:
+            hit["is_primary"] = False
         return fused
+
+    # 初始化：所有结果默认 is_primary = False
+    for hit in fused:
+        hit["is_primary"] = False
 
     # ── 级联 C: 前置关系 ──
     required_by_others = set()   # name → 被其他条目依赖（name_zh / name_en）

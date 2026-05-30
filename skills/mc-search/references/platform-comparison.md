@@ -119,7 +119,7 @@
 |----------|------------|------|
 | `mod` / `item` / `modpack` | MC百科 > Modrinth | 中文用户优先 MC百科 |
 | `shader` / `resourcepack` | Modrinth（唯一） | 仅 Modrinth 有数据 |
-| `entity` / `biome` / `dimension` / `vanilla` | minecraft.wiki > minecraft.wiki/zh > MC百科 > Modrinth | 原版内容优先 wiki |
+| `entity` / `biome` / `dimension` / `vanilla` | minecraft.wiki > minecraft.wiki/zh | 原版内容仅 wiki 有数据，MC百科和 Modrinth 被禁用 |
 
 ### 融合字段 `_sources`
 

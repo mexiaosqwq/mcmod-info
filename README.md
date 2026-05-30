@@ -50,7 +50,7 @@ mc-search --json show sodium --deps              # 依赖
 mc-search --json wiki 红石 -r                    # wiki 搜+读
 ```
 
-`search` 支持 `--type mod/item/modpack/shader/resourcepack/vanilla/entity/biome/dimension`，`--cache` 启用缓存。
+`search` 支持 `--type mod/item/modpack/shader/resourcepack/vanilla/entity/biome/dimension`，`--author` 按作者搜索，`--cache` 启用缓存。
 
 ## 项目结构
 
@@ -59,8 +59,8 @@ mc-search-skill/
 ├── skills/mc-search/
 │   ├── SKILL.md               # Agent 调用定义
 │   ├── scripts/
-│   │   ├── core.py             # 搜索/解析/融合/缓存 (~4000 行)
-│   │   └── cli.py              # CLI 入口 (~1290 行)
+│   │   ├── core.py             # 搜索/解析/融合/缓存 (~4074 行)
+│   │   └── cli.py              # CLI 入口 (~1348 行)
 │   └── references/            # 错误码/平台对比/结果Schema
 ├── README.md
 └── README.en.md

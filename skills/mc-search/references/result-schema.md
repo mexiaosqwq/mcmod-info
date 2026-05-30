@@ -15,7 +15,23 @@
 | `source` | str | 来源平台：`mcmod.cn` / `modrinth` / `minecraft.wiki` / `minecraft.wiki/zh`；融合模式下为 `\|` 分隔的多平台字符串 |
 | `source_id` | str | 平台内 ID（如 class ID、slug、pageid） |
 | `type` | str | 项目类型：`mod` / `item` / `modpack` / `shader` / `resourcepack` / `wiki` |
-| `is_primary` | bool | 融合模式下存在，是否为本体模组 |
+| `is_primary` | bool | 融合模式下存在，是否为本体模组。判断逻辑按 C→B→A→兜底四级联： |
+
+### `is_primary` 本体判别级联逻辑
+
+融合管线 `_fuse_results()` 最后一步调用 `_mark_primary()`，按以下顺序判断：
+
+| 级 | 判定条件 | 命中即返回 |
+|----|---------|-----------|
+| **C — 前置关系** | 某条目的 `relationships.requires` 中包含其他条目的 `name_zh` 或 `name_en` | 被依赖者标记为 `is_primary: true`，立即返回 |
+| **B — 精确名匹配 + 最高下载量** | `name_zh`/`name`/`name_en` 与查询词完全相等，且下载量 > 0 | 精确匹配中下载量最高的条目标记为 `is_primary: true`，立即返回 |
+| **A — 最高下载量** | 所有条目中下载量最高者 | 下载量最高的条目标记为 `is_primary: true` |
+| **兜底 — 最高分** | 以上三级均无人命中 | 相关性分数 `_score` 最高的条目标记为 `is_primary: true` |
+
+**多候选交集逻辑**（`_build_fused_output`）：
+- 精确匹配去重失败后，使用模糊匹配（`SequenceMatcher` 相似度 ≥ 0.85 且长度 ≥ 4）
+- 模糊匹配后，`_sources` 字段直接从组内 entries 收集平台集合（而非依赖 `name_platform_count` 的 frozenset 分组）
+- 多平台命中时，`_score` 增加 `(平台数-1) × 10` 加权分
 
 ---
 
@@ -37,10 +53,10 @@
 | `supported_versions` | 支持的版本列表（MC百科 detail 才有，搜索结果不含） |
 | `cover_image` | 封面图 URL |
 | `screenshots` | 截图 URL 列表 |
-| `relationships.requires` | 前置 Mod 列表（MC百科 detail 才有；解析失败时含 `_error: "parse_failed"`，无关系时为 `{}`） |
-| `relationships.integrates` | 联动 Mod 列表（MC百科 detail 才有；解析失败时含 `_error: "parse_failed"`，无关系时为 `{}`） |
+| `relationships.requires` | 前置 Mod 列表（MC百科 detail 才有） |
+| `relationships.integrates` | 联动 Mod 列表（MC百科 detail 才有） |
 
-> **注意**：当 HTML 存在但关系解析失败时，`relationships` 字段会包含 `{"_error": "parse_failed"}` 错误信号，而非简单的 `{}`。
+> **注意**：`relationships` 字段始终返回 `{requires: [...], integrates: [...]}` 结构。无关系时两个列表为空 `[]`，不会返回 `_error` 信号。`_parse_attempted` 内部标记用于调试，不暴露给最终结果。
 | `has_changelog` | 是否有更新日志布尔值（MC百科 detail 才有） |
 | `is_vanilla` | 是否为 MC百科原版内容分类（URL 含 `/class/1.html`，仅 MC百科 mod 搜索结果包含） |
 | `external_links` | 外部平台链接字典（无时为 null）：`official` / `curseforge` / `modrinth` / `github` / `wiki` / `discord` / `jenkins` / `mcbbs` |
@@ -199,10 +215,26 @@ Modrinth 整合包搜索结果结构与模组类似：
 | Modrinth | `body` | 完整 | 项目描述（已赞助者名单清洗，不截断） |
 | Modrinth | `gallery` | 默认关闭 | 项目截图（show --full 时返回全部） |
 | Modrinth | `version_groups` | 5 组 | 版本分组 |
-| Modrinth | `changelogs` | 5 条 | 更新日志 |
+| Modrinth | `changelogs` | 3 条（搜索）/ 5 条（`show --full`） | 更新日志 |
 | 多平台 | `description` | 500 字符 | 描述文本截断（`_MAX_SEARCH_DESC_CHARS`） |
 
 > **注意**：`show --full` 命令仅 Modrinth 数据无截断，MC百科截图默认关闭（不返回）。
+
+### 跨平台桥接与回填机制
+
+**CJK 跨语言桥接**（`_apply_cjk_bridge`）：
+- 当关键词包含中文时，系统自动从 MC百科 搜索结果中提取 `name_en`，去 Modrinth 补搜
+- 补搜结果去重后合并到 `results["modrinth"]` 中，对 Agent 透明
+
+**bbsmc.net 回填副作用**（`_fill_bbsmc_fields`）：
+- 当 Modrinth 无中文数据时，系统通过 bbsmc.net API 获取双语名（如 "机械动力 - Create"）
+- **副作用**：若 bbsmc 返回的双语名中中文部分含中文字符，会提取中文部分填入 `_name_zh_cn` 内部字段
+- **副作用**：若 `name_en` 被 bbsmc 双语名污染（含中文字符），会用双语名的英文部分覆盖 `name_en` 和 `name`
+- `description` 字段也会被 bbsmc 的 `summary` 补充（当原描述为空时）
+
+**CJK 回退逻辑**（`search_modrinth`）：
+- 文档仅描述 MC百科 → Modrinth 正向桥接
+- 实际：当 CJK 关键词在 Modrinth 直接搜索无结果时，bbsmc 回填的双语名中的英文部分会被提取并再次补搜
 
 ---
 
@@ -239,7 +271,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `description` | 模组描述 |
 | `status` | 状态 |
 | `source_type` | `open_source` / `closed_source` |
-| `author` | 作者名（与搜索参数一致） |
+| `author` | 作者名（与搜索参数完全一致） |
 
 > **注意**：`search_mcmod_author` 的 `author` 字段与搜索参数完全一致，用于标识该模组属于哪个作者。
 | `categories` | 分类列表 |
@@ -250,12 +282,16 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `relationships` | 前置/联动模组 |
 | `has_changelog` | 是否有更新日志 |
 | `is_vanilla` | 是否为原版内容 |
+| `external_links` | 外部平台链接字典：`official` / `curseforge` / `modrinth` / `github` / `wiki` / `discord` / `jenkins` / `mcbbs`（含 `cross_platform_ids` 字段标识跨平台 ID 映射） |
+| `author_team` | 作者团队列表（含姓名和 roles） |
+| `community_stats` | 社区统计数据（rating / rating_text / positive_rate / page_views 等） |
+| `content_list` | MC百科资料列表（物品/方块、生物/实体等分类统计） |
 
 ---
 
 ## Modrinth — `search_modrinth` 搜索结果（轻量）
 
-`search_modrinth` 仅返回以下 8 个字段：
+`search_modrinth` 返回以下字段（详情 API 补充 `description` 和 `snippet`）：
 
 | 字段 | 说明 |
 |------|------|
@@ -313,6 +349,10 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `downloads` | 总下载量 |
 | `version_groups` | 版本分组列表（**最多 5 组**，已聚合去重） |
 | `changelogs` | 最近更新日志（**最多 5 条**，--json 专用） |
+| `project_files` | 项目文件列表（含文件名、下载 URL、哈希值） |
+| `version_history` | 版本历史（完整版本列表，非仅 `version_groups` 聚合） |
+| `team` | 开发团队成员列表（含角色信息） |
+| `socials` | 社交媒体链接（替代旧的 `source_url`/`discord_url` 等） |
 
 ---
 
@@ -369,7 +409,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 ```
 
 **平台优先级**：
-- entity/biome/dimension/vanilla → `minecraft.wiki` > `minecraft.wiki/zh` > `mcmod.cn` > `modrinth`
+- entity/biome/dimension/vanilla → `minecraft.wiki` > `minecraft.wiki/zh`（仅 wiki 两个平台，MC百科和 Modrinth 被禁用）
 - mod/item/modpack → `mcmod.cn` > `modrinth`（仅这两个平台）
 - shader/resourcepack → `modrinth`（仅 Modrinth 平台）
 
@@ -387,6 +427,7 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `type` | `"wiki"` |
 | `snippet` | 页面摘要（从 intro 区域提取，CJK 页面使用 fallback 策略） |
 | `sections` | 章节标题列表（直接访问文章时从 h2/h3 提取；MediaWiki API 降级路径返回空列表） |
+| `main_image` | 页面主图 URL（从 infobox 或 intro 第一段图片提取） |
 
 ---
 
@@ -401,3 +442,58 @@ Modrinth 整合包搜索结果结构与模组类似：
 | `_sections` | 层级 section 列表（新版结构）：`{"heading", "parent", "content"}`，parent 为 null 表示顶级 h2，子节点为 h3/h4 |
 | `infobox` | 结构化数据（`include_infobox=True` 时返回） |
 | `main_image` | 页面主图 URL（`include_infobox=True` 时返回） |
+
+---
+
+## 内部字段（不暴露给最终结果，仅用于融合管线）
+
+| 字段 | 说明 |
+|------|------|
+| `_name_zh_cn` | 中文名称的标准化变体，用于辅助跨平台去重。从 bbsmc 双语名中提取的纯中文部分（如 "机械动力 - Create" → "机械动力"）。融合输出前会被清理。 |
+| `_platform` | 临时标记来源平台，融合后移除 |
+| `_score` | 相关性分数，融合后保留用于排序 |
+| `_sources` | 融合来源平台列表，仅在 `fuse=True` 时保留在最终结果 |
+| `_truncated` | 截断元数据，说明哪些字段被截断及截断数量 |
+
+---
+
+## 网络层说明
+
+### `curl` 函数双网络栈
+
+`core.py` 中的 `curl()` 函数根据 URL 域名自动选择网络库：
+
+| URL 类型 | 网络库 | 说明 |
+|----------|--------|------|
+| `mcmod.cn` / `search.mcmod.cn` | `curl_cffi` + CDN 绕过 | TLS 指纹模拟 chrome124，绕过 WAF/CDN 盾 |
+| `minecraft.wiki` / `zh.minecraft.wiki` | `curl_cffi` | 绕过反爬机制 |
+| 其他 URL（Modrinth API 等） | `urllib.request` | 标准库，无特殊处理 |
+
+### `_cached` 装饰器缓存粒度
+
+| 函数 | 缓存 key 前缀 | 缓存内容 | TTL |
+|------|-------------|---------|-----|
+| `search_mcmod` | `mcmod` | 搜索结果列表 | 1 小时 |
+| `search_mcmod_author` | `mcmod_author` | 作者模组列表 | 1 小时 |
+| `search_wiki` / `search_wiki_zh` | `wiki` | wiki 搜索结果 | 1 小时 |
+| `fetch_mod_info` | `mod_info` | 详情页完整数据 | 1 小时 |
+| `get_mod_dependencies` | `mod_deps` | 依赖关系数据 | 1 小时 |
+
+> **注意**：`read_wiki` 的 `max_paragraphs=-1` 表示无限制返回所有段落（默认 `_DEFAULT_PARAGRAPHS=200`）。
+
+---
+
+## WAF 回退路径
+
+当 MC百科 详情页被 WAF 拦截时，`_build_mcmod_fallback_result()` 从搜索页数据构建最小结果。降级时丢失的字段：
+
+| 字段 | 搜索页有 | 详情页有 | 降级后 |
+|------|---------|---------|--------|
+| `supported_versions` | ❌ | ✅ | ❌ 丢失 |
+| `screenshots` | ✅（有限） | ✅（完整） | ⚠️ 仅搜索页数据 |
+| `relationships.requires/integrates` | ❌ | ✅ | ❌ 丢失 |
+| `has_changelog` | ❌ | ✅ | ❌ 丢失 |
+| `external_links` | ❌ | ✅ | ❌ 丢失 |
+| `author_team` | ❌ | ✅ | ❌ 丢失 |
+| `community_stats` | ❌ | ✅ | ❌ 丢失 |
+| `content_list` | ❌ | ✅ | ❌ 丢失 |
